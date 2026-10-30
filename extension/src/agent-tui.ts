@@ -67,8 +67,9 @@ export default function agentTui(pi: ExtensionAPI) {
 			await fs.rename(tmp, target);
 			file = target;
 			lastTitle = rec.title;
-		} catch {
-			// Never fail omp over the dashboard.
+		} catch (error) {
+			// Never fail omp over the dashboard; leave a trace in the omp log instead.
+			pi.logger.warn("agent-tui: publish failed", { file: target, error: String(error) });
 		}
 	}
 
@@ -76,8 +77,8 @@ export default function agentTui(pi: ExtensionAPI) {
 		try {
 			if (ctx.agent.kind === "main") await fs.rm(pidDir, { recursive: true, force: true });
 			else if (file) await fs.rm(file, { force: true });
-		} catch {
-			// Ignored, see publish.
+		} catch (error) {
+			pi.logger.warn("agent-tui: cleanup failed", { dir: pidDir, error: String(error) });
 		}
 		file = undefined;
 	}
@@ -89,6 +90,12 @@ export default function agentTui(pi: ExtensionAPI) {
 		} else {
 			enabled = rootPublishes;
 		}
+		pi.logger.debug("agent-tui: session_start", {
+			agent: ctx.agent.id,
+			kind: ctx.agent.kind,
+			mode: ctx.mode,
+			enabled,
+		});
 		if (!enabled) return;
 		startedAt = new Date().toISOString();
 		reduce(tracker, { type: "session_start" });
