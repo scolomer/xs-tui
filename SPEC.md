@@ -153,13 +153,19 @@ agent-tui peut démarrer avant ou après les instances omp.
 
 ### Branche git
 
-agent-tui résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille le fichier HEAD,
-y compris celui d'un worktree, pour suivre les changements de branche. Le code de lecture de HEAD
-est recopié de `head_label` d'omp-sessions.
+agent-tui résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
+et index, y compris ceux d'un worktree, pour suivre les changements de branche et de statut. Le
+code de lecture de HEAD est recopié de `head_label` d'omp-sessions.
 
 - Hors dépôt git : aucun segment branche.
 - HEAD sur une branche : nom complet (`feat/spoon-feeder-cep-sc-131806`).
 - HEAD détaché : `@<sha court>`.
+- Couleur comme dans la barre d'état d'omp : verte si le dépôt est propre, jaune s'il a des
+  fichiers indexés, modifiés ou non suivis.
+
+Le statut parcourt le worktree : il est calculé hors de la boucle d'affichage, toutes les 10 s
+(cadence d'omp), et aussitôt quand HEAD ou l'index changent ou qu'une instance publie. Une
+modification de fichier sans publication ni `git add` apparaît donc avec au plus 10 s de retard.
 
 ### Format incompatible
 
@@ -175,7 +181,9 @@ de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visib
 ```
 
 - Le dossier est un segment powerline : ` <dossier>` sur fond coloré, suivi de `` dans
-  la couleur de ce fond pour la transition. La branche et le titre sont en texte normal.
+  la couleur de ce fond pour la transition. La branche est colorée selon le statut du dépôt, le
+  titre est en texte normal.
+- Les titres sont alignés en colonne, au moins deux espaces après la plus large branche.
 - Le segment ` <branche>` est absent hors dépôt git.
 - Le titre est affiché tel quel ; rien tant que la session n'a pas de titre.
 - La ligne est tronquée à droite si elle dépasse la largeur.

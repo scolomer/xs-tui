@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::git::Repo;
 use crate::record::{Kind, Record, State};
 
 /// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide.
@@ -12,15 +13,12 @@ pub type Key = (i32, String);
 /// Id de l'agent racine d'un process omp.
 pub const ROOT_ID: &str = "Main";
 
-pub struct Instance {
-    pub rec: Record,
-    pub branch: Option<String>,
-    pub git_dir: Option<PathBuf>,
-}
-
 #[derive(Default)]
 pub struct Model {
-    pub instances: HashMap<Key, Instance>,
+    pub instances: HashMap<Key, Record>,
+    /// Dépôt git par `cwd` d'instance ; absent tant que le premier statut n'est pas calculé,
+    /// `None` hors dépôt.
+    pub repos: HashMap<PathBuf, Option<Repo>>,
     /// pid -> message ; la ligne d'erreur remplace les lignes du pid.
     pub errors: BTreeMap<i32, String>,
     /// pids dont la sortie est surveillée.
@@ -32,6 +30,13 @@ pub struct Model {
     pub message: Option<(String, Instant)>,
     /// Frame du spinner.
     pub tick: usize,
+}
+
+impl Model {
+    /// Dépôt du dossier `cwd`, s'il est connu et que `cwd` est dans un dépôt.
+    pub fn repo(&self, rec: &Record) -> Option<&Repo> {
+        self.repos.get(&rec.cwd).and_then(Option::as_ref)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -54,22 +59,22 @@ pub struct Row {
 /// Lignes à afficher, dans l'ordre : racines par `startedAt`, chacune suivie de ses sous-agents,
 /// puis les lignes d'erreur par pid.
 pub fn rows(m: &Model) -> Vec<Row> {
-    let mut roots: Vec<&Instance> = m
+    let mut roots: Vec<&Record> = m
         .instances
         .values()
-        .filter(|i| i.rec.agent.kind == Kind::Main && i.rec.agent.id == ROOT_ID && !m.errors.contains_key(&i.rec.pid))
+        .filter(|r| r.agent.kind == Kind::Main && r.agent.id == ROOT_ID && !m.errors.contains_key(&r.pid))
         .collect();
-    roots.sort_by(|a, b| (&a.rec.started_at, a.rec.pid).cmp(&(&b.rec.started_at, b.rec.pid)));
+    roots.sort_by(|a, b| (&a.started_at, a.pid).cmp(&(&b.started_at, b.pid)));
 
     let mut out = Vec::new();
     for root in roots {
-        let pid = root.rec.pid;
+        let pid = root.pid;
         let root_key = (pid, ROOT_ID.to_string());
-        let subs: HashMap<&str, &Instance> = m
+        let subs: HashMap<&str, &Record> = m
             .instances
             .iter()
-            .filter(|((p, _), i)| *p == pid && i.rec.agent.kind == Kind::Sub)
-            .map(|((_, id), i)| (id.as_str(), i))
+            .filter(|((p, _), r)| *p == pid && r.agent.kind == Kind::Sub)
+            .map(|((_, id), r)| (id.as_str(), r))
             .collect();
         let folded = m.folded.contains(&root_key);
         out.push(Row {
@@ -81,12 +86,12 @@ pub fn rows(m: &Model) -> Vec<Row> {
         if folded {
             continue;
         }
-        let mut children: HashMap<&str, Vec<&Instance>> = HashMap::new();
+        let mut children: HashMap<&str, Vec<&Record>> = HashMap::new();
         for (id, sub) in &subs {
             children.entry(attach_point(id, &subs)).or_default().push(sub);
         }
         for list in children.values_mut() {
-            list.sort_by(|a, b| (&a.rec.started_at, &a.rec.agent.id).cmp(&(&b.rec.started_at, &b.rec.agent.id)));
+            list.sort_by(|a, b| (&a.started_at, &a.agent.id).cmp(&(&b.started_at, &b.agent.id)));
         }
         push_children(&mut out, pid, root, ROOT_ID, 1, &children);
     }
@@ -101,8 +106,8 @@ pub fn rows(m: &Model) -> Vec<Row> {
 
 /// Parent affiché d'un sous-agent : son `parentId` si la chaîne remonte jusqu'à la racine du pid,
 /// sinon la racine (parent inconnu ou disparu, ou cycle).
-fn attach_point<'a>(id: &'a str, subs: &HashMap<&'a str, &'a Instance>) -> &'a str {
-    let parent_of = |id: &str| subs.get(id).and_then(|i| i.rec.agent.parent_id.as_deref());
+fn attach_point<'a>(id: &'a str, subs: &HashMap<&'a str, &'a Record>) -> &'a str {
+    let parent_of = |id: &str| subs.get(id).and_then(|r| r.agent.parent_id.as_deref());
     let Some(parent) = parent_of(id) else { return ROOT_ID };
     let mut cur = parent;
     for _ in 0..=subs.len() {
@@ -123,17 +128,17 @@ fn attach_point<'a>(id: &'a str, subs: &HashMap<&'a str, &'a Instance>) -> &'a s
 fn push_children(
     out: &mut Vec<Row>,
     pid: i32,
-    parent: &Instance,
+    parent: &Record,
     parent_id: &str,
     depth: u32,
-    children: &HashMap<&str, Vec<&Instance>>,
+    children: &HashMap<&str, Vec<&Record>>,
 ) {
     let Some(list) = children.get(parent_id) else { return };
     for child in list {
-        let id = child.rec.agent.id.as_str();
+        let id = child.agent.id.as_str();
         out.push(Row {
             key: (pid, id.to_string()),
-            kind: RowKind::Sub { depth, show_location: child.rec.cwd != parent.rec.cwd },
+            kind: RowKind::Sub { depth, show_location: child.cwd != parent.cwd },
             parent: Some((pid, parent_id.to_string())),
             hidden_children: 0,
         });
@@ -167,7 +172,7 @@ pub fn select_after_rebuild(m: &mut Model, before: &[Row], after: &[Row]) {
 
 /// Vrai si une ligne affichée est en cours de travail : le spinner doit être animé.
 pub fn any_working(m: &Model, rows: &[Row]) -> bool {
-    rows.iter().any(|r| m.instances.get(&r.key).is_some_and(|i| i.rec.state == State::Working))
+    rows.iter().any(|r| m.instances.get(&r.key).is_some_and(|rec| rec.state == State::Working))
 }
 
 #[cfg(test)]
@@ -196,7 +201,7 @@ mod tests {
         let mut m = Model::default();
         for rec in recs {
             let key = (rec.pid, rec.agent.id.clone());
-            m.instances.insert(key, Instance { rec, branch: None, git_dir: None });
+            m.instances.insert(key, rec);
         }
         m
     }

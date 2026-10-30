@@ -8,8 +8,8 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 
-use crate::model::{Instance, Model, ROOT_ID, Row, RowKind};
-use crate::record::State;
+use crate::model::{Model, ROOT_ID, Row, RowKind};
+use crate::record::{Record, State};
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -27,7 +27,7 @@ pub fn draw(frame: &mut Frame, m: &Model, rows: &[Row], own_zellij: Option<&str>
             .iter()
             .filter(|r| r.kind == RowKind::Root)
             .filter_map(|r| m.instances.get(&r.key))
-            .map(|inst| width(&location(inst)))
+            .map(|rec| width(&location(m, rec)))
             .max()
             .unwrap_or(0);
         let items: Vec<ListItem> =
@@ -54,12 +54,12 @@ fn indicator(state: State, tick: usize) -> Span<'static> {
 
 fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize) -> Line<'a> {
     let pid = row.key.0;
-    let Some(inst) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) else {
+    let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) else {
         let message = m.errors.get(&pid).map_or("", String::as_str);
         return Line::from(vec![Span::styled("⚠ ", Color::Red), Span::raw(format!("pid {pid} : {message}"))]);
     };
-    let root = m.instances.get(&(pid, ROOT_ID.to_string())).unwrap_or(inst);
-    let dim = !zellij::reachable(own_zellij, root.rec.zellij.as_ref());
+    let root = m.instances.get(&(pid, ROOT_ID.to_string())).unwrap_or(rec);
+    let dim = !zellij::reachable(own_zellij, root.zellij.as_ref());
 
     // Spans hors indicateur : atténués si l'instance est hors de portée.
     let mut before = Vec::new();
@@ -73,43 +73,48 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
         RowKind::Error => unreachable!(),
     };
     if show_location {
-        after = location(inst);
+        after = location(m, rec);
     }
     match row.kind {
         RowKind::Root => {
             // Un espace de plus que la plus large branche, pour bien séparer le titre.
             let pad = (title_col + 1).saturating_sub(width(&after));
             after.push(Span::raw(" ".repeat(pad)));
-            after.push(Span::raw(inst.rec.title.as_str()));
+            after.push(Span::raw(rec.title.as_str()));
             if row.hidden_children > 0 {
                 after.push(Span::raw(format!(" ▸ {}", row.hidden_children)).dim());
             }
         }
         _ => {
-            after.push(Span::raw(inst.rec.agent.id.as_str()));
+            after.push(Span::raw(rec.agent.id.as_str()));
             after.push(Span::raw(" "));
-            after.push(Span::styled(inst.rec.agent.name.as_str(), Color::DarkGray));
+            after.push(Span::styled(rec.agent.name.as_str(), Color::DarkGray));
         }
     }
 
     let dimmed = |spans: Vec<Span<'a>>| spans.into_iter().map(move |s| if dim { s.dim() } else { s });
     let mut spans: Vec<Span> = dimmed(before).collect();
-    spans.push(indicator(inst.rec.state, m.tick));
+    spans.push(indicator(rec.state, m.tick));
     spans.extend(dimmed(vec![Span::raw(" ")]));
     spans.extend(dimmed(after));
     Line::from(spans)
 }
 
-/// Segment powerline du dossier, puis branche git s'il y en a une.
-fn location(inst: &Instance) -> Vec<Span<'_>> {
-    let folder = folder_name(&inst.rec.cwd);
+/// Segment powerline du dossier, puis branche git s'il y en a une : verte si le dépôt est propre,
+/// jaune s'il a des modifications (couleurs `statusLineGitClean`/`statusLineGitDirty` d'omp).
+fn location<'a>(m: &'a Model, rec: &'a Record) -> Vec<Span<'a>> {
+    let folder = folder_name(&rec.cwd);
     let mut out = vec![
         Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)),
         Span::styled("\u{e0b0}", Color::Blue),
         Span::raw(" "),
     ];
-    if let Some(branch) = &inst.branch {
-        out.push(Span::raw(format!("\u{f126} {branch} ")));
+    if let Some(repo) = m.repo(rec)
+        && let Some(branch) = &repo.label
+    {
+        let color = if repo.dirty { Color::Yellow } else { Color::Green };
+        out.push(Span::styled(format!("\u{f126} {branch}"), color));
+        out.push(Span::raw(" "));
     }
     out
 }
@@ -129,8 +134,8 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect) {
     }
     let mut counts = [0usize; 4];
     for row in rows {
-        if let Some(inst) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) {
-            counts[inst.rec.state as usize] += 1;
+        if let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) {
+            counts[rec.state as usize] += 1;
         }
     }
     let mut spans = Vec::new();

@@ -21,8 +21,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use notify::RecommendedWatcher;
 use ratatui::widgets::ListState;
 
-use model::{Instance, Key, Model, ROOT_ID, Row, RowKind};
-use record::{Parsed, Record};
+use model::{Key, Model, ROOT_ID, Row, RowKind};
+use record::Parsed;
 use watch::Event;
 
 const SPINNER_FRAME: Duration = Duration::from_millis(100);
@@ -38,6 +38,8 @@ struct App {
     watcher: RecommendedWatcher,
     /// Gitdirs déjà ajoutés au watcher.
     git_dirs: HashSet<PathBuf>,
+    /// Demandes au thread de statut git : dossiers des instances.
+    git: Sender<Vec<PathBuf>>,
 }
 
 fn main() {
@@ -63,11 +65,13 @@ fn main() {
         tx: tx.clone(),
         watcher,
         git_dirs: HashSet::new(),
+        git: git::spawn_refresher(tx.clone()),
     };
 
     let mut terminal = ratatui::init();
     watch::spawn_terminal_reader(tx);
     app.rescan();
+    app.request_git();
     app.rebuild();
     let result = app.run(&mut terminal, &rx);
     ratatui::restore();
@@ -99,6 +103,7 @@ impl App {
                 match event {
                     Event::Fs => fs = true,
                     Event::Head => head = true,
+                    Event::Git(cwd, repo) => self.apply_git(cwd, repo),
                     Event::ProcExit(pid) => self.proc_exit(pid),
                     Event::Resize => {}
                     Event::Key(key) => {
@@ -111,8 +116,8 @@ impl App {
             if fs {
                 self.rescan();
             }
-            if head {
-                self.refresh_branches();
+            if fs || head {
+                self.request_git();
             }
             if model::any_working(&self.model, &self.rows) {
                 self.model.tick = self.model.tick.wrapping_add(1);
@@ -179,47 +184,35 @@ impl App {
                         rec.pid = pid;
                         let key = (pid, rec.agent.id.clone());
                         seen.insert(key.clone());
-                        self.upsert(key, rec);
+                        self.model.instances.insert(key, rec);
                     }
                 }
             }
         }
         self.model.instances.retain(|key, _| seen.contains(key));
         self.model.errors = errors;
+        let cwds: HashSet<&PathBuf> = self.model.instances.values().map(|rec| &rec.cwd).collect();
+        self.model.repos.retain(|cwd, _| cwds.contains(cwd));
     }
 
-    fn upsert(&mut self, key: Key, rec: Record) {
-        if let Some(inst) = self.model.instances.get_mut(&key) {
-            let moved = inst.rec.cwd != rec.cwd;
-            inst.rec = rec;
-            if !moved {
-                return;
-            }
-        } else {
-            self.model.instances.insert(key.clone(), Instance { rec, branch: None, git_dir: None });
-        }
-        let inst = self.model.instances.get_mut(&key).expect("inséré ci-dessus");
-        let repo = git::inspect(&inst.rec.cwd);
-        inst.branch = repo.as_ref().and_then(|r| r.label.clone());
-        inst.git_dir = repo.map(|r| r.git_dir);
-        if let Some(git_dir) = inst.git_dir.clone()
-            && !self.git_dirs.contains(&git_dir)
+    /// Demande le statut git de tous les dossiers d'instance (calcul immédiat sur le thread dédié).
+    fn request_git(&self) {
+        let cwds: HashSet<&PathBuf> = self.model.instances.values().map(|rec| &rec.cwd).collect();
+        let _ = self.git.send(cwds.into_iter().cloned().collect());
+    }
+
+    fn apply_git(&mut self, cwd: PathBuf, repo: Option<git::Repo>) {
+        if let Some(git_dir) = repo.as_ref().map(|r| &r.git_dir)
+            && !self.git_dirs.contains(git_dir)
         {
-            match watch::watch_git_dir(&mut self.watcher, &git_dir) {
+            match watch::watch_git_dir(&mut self.watcher, git_dir) {
                 Ok(()) => {
-                    self.git_dirs.insert(git_dir);
+                    self.git_dirs.insert(git_dir.clone());
                 }
                 Err(err) => self.notify(format!("{} : {err}", git_dir.display())),
             }
         }
-    }
-
-    fn refresh_branches(&mut self) {
-        for inst in self.model.instances.values_mut() {
-            if inst.git_dir.is_some() {
-                inst.branch = git::inspect(&inst.rec.cwd).and_then(|r| r.label);
-            }
-        }
+        self.model.repos.insert(cwd, repo);
     }
 
     fn proc_exit(&mut self, pid: i32) {
@@ -262,7 +255,7 @@ impl App {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 // Un sous-agent partage le pane de sa racine.
                 let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
-                if let Err(message) = zellij::focus(self.own_zellij.as_deref(), root.rec.zellij.as_ref()) {
+                if let Err(message) = zellij::focus(self.own_zellij.as_deref(), root.zellij.as_ref()) {
                     self.notify(message);
                 }
             }

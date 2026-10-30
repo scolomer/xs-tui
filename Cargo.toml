@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.29"
-gix = { version = "0.90", default-features = false, features = ["sha1"] }
+gix = { version = "0.90", default-features = false, features = ["sha1", "status"] }
 libc = "0.2"
 notify = "8.2"
 ratatui = "0.30"

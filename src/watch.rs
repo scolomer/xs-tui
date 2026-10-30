@@ -1,4 +1,4 @@
-//! Événements de la boucle principale : fichiers publiés, HEAD git, mort d'un pid, terminal.
+//! Événements de la boucle principale : fichiers publiés, gitdirs, statut git, mort d'un pid, terminal.
 //!
 //! Une seule instance `notify` (FSEvents sur macOS, inotify sur Linux) surveille le dossier
 //! d'exécution récursivement et les gitdirs des instances, sans récursion.
@@ -12,8 +12,10 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 pub enum Event {
     /// Un fichier publié a changé : relire le dossier d'exécution.
     Fs,
-    /// Un HEAD git a changé : relire les branches.
+    /// `HEAD` ou l'index d'un gitdir a changé : recalculer branches et statut.
     Head,
+    /// Résultat du thread de statut pour un `cwd` (`None` hors dépôt).
+    Git(PathBuf, Option<crate::git::Repo>),
     ProcExit(i32),
     Key(KeyEvent),
     Resize,
@@ -27,7 +29,7 @@ pub fn start(run_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWat
     let prefix = root.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
-        let head = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "HEAD"));
+        let head = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "HEAD" || n == "index"));
         let published = event.paths.iter().any(|p| p.starts_with(&prefix) && !p.extension().is_some_and(|e| e == "tmp"));
         if head {
             let _ = tx.send(Event::Head);
@@ -40,7 +42,7 @@ pub fn start(run_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWat
     Ok(watcher)
 }
 
-/// Ajoute le gitdir d'une instance pour suivre son HEAD.
+/// Ajoute le gitdir d'une instance pour suivre son HEAD et son index.
 pub fn watch_git_dir(watcher: &mut RecommendedWatcher, git_dir: &Path) -> notify::Result<()> {
     watcher.watch(git_dir, RecursiveMode::NonRecursive)
 }
