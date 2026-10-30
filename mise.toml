@@ -1,0 +1,20 @@
+[tools]
+rust = "latest"
+bun = "latest"
+
+[tasks.build]
+description = "Compile agent-tui (release) et vérifie l'extension"
+run = [
+  "cargo build --release",
+  "bun install --cwd extension",
+  "bun run --cwd extension typecheck",
+]
+
+[tasks.start]
+description = "Compile puis lance agent-tui"
+depends = ["build"]
+run = "./target/release/agent-tui"
+
+[tasks.test]
+description = "Tests Rust et extension"
+run = ["cargo test", "bun test --cwd extension"]

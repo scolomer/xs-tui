@@ -1,0 +1,19 @@
+{
+  "name": "agent-tui",
+  "version": "0.1.0",
+  "description": "omp extension: publishes each agent's run state for agent-tui",
+  "type": "module",
+  "private": true,
+  "omp": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.13.1",
+    "@types/bun": "latest",
+    "typescript": "^7.0.2"
+  }
+}
