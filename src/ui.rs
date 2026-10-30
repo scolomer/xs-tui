@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 
 use crate::model::{Model, ROOT_ID, Row, RowKind};
-use crate::record::{Record, State};
+use crate::record::State;
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -22,12 +22,16 @@ pub fn draw(frame: &mut Frame, m: &Model, rows: &[Row], own_zellij: Option<&str>
         let middle = Rect { y: list_area.y + list_area.height / 2, height: 1.min(list_area.height), ..list_area };
         frame.render_widget(Paragraph::new("Aucune instance omp").dim().alignment(Alignment::Center), middle);
     } else {
-        // Les titres des racines commencent tous à la même colonne, après le plus large dossier/branche.
+        // Les titres des racines et des sessions dormantes commencent tous à la même colonne,
+        // après le plus large dossier/branche.
         let title_col = rows
             .iter()
-            .filter(|r| r.kind == RowKind::Root)
-            .filter_map(|r| m.instances.get(&r.key))
-            .map(|rec| width(&location(m, rec)))
+            .filter_map(|r| match r.kind {
+                RowKind::Root => m.instances.get(&r.key).map(|rec| rec.cwd.as_path()),
+                RowKind::Dormant => m.dormant(&r.key).map(|p| p.cwd.as_path()),
+                _ => None,
+            })
+            .map(|cwd| width(&location(m, cwd)))
             .max()
             .unwrap_or(0);
         let items: Vec<ListItem> =
@@ -54,6 +58,16 @@ fn indicator(state: State, tick: usize) -> Span<'static> {
 
 fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize) -> Line<'a> {
     let pid = row.key.0;
+    if row.kind == RowKind::Dormant {
+        let Some(p) = m.dormant(&row.key) else { return Line::default() };
+        let mut spans = vec![Span::styled("○", Color::DarkGray), Span::raw(" ")];
+        spans.extend(location(m, &p.cwd));
+        let pad = (title_col + 1).saturating_sub(width(&spans[2..]));
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::raw(p.title.as_str()));
+        spans.push(pin());
+        return Line::from(spans);
+    }
     let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) else {
         let message = m.errors.get(&pid).map_or("", String::as_str);
         return Line::from(vec![Span::styled("⚠ ", Color::Red), Span::raw(format!("pid {pid} : {message}"))]);
@@ -72,10 +86,10 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
             before.push(Span::raw(row.tree.clone()));
             (show_location, rec.state == State::Blocked)
         }
-        RowKind::Error => unreachable!(),
+        RowKind::Error | RowKind::Dormant => unreachable!(),
     };
     if show_location {
-        after = location(m, rec);
+        after = location(m, &rec.cwd);
     }
     match row.kind {
         RowKind::Root => {
@@ -85,6 +99,9 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
             after.push(Span::raw(rec.title.as_str()));
             if row.hidden_children > 0 {
                 after.push(Span::raw(format!(" ▸ {}", row.hidden_children)).dim());
+            }
+            if m.is_pinned(&rec.session_id) {
+                after.push(pin());
             }
         }
         _ => {
@@ -104,17 +121,22 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     Line::from(spans)
 }
 
+/// Épingle `nf-md-pin` grise en fin de ligne d'une session épinglée.
+fn pin() -> Span<'static> {
+    Span::styled(" \u{f0403}", Color::DarkGray)
+}
+
 /// Segment powerline du dossier, puis branche git s'il y en a une, comme le segment git d'omp :
 /// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
 /// `+indexés` et `?non suivis` non nuls.
-fn location<'a>(m: &'a Model, rec: &'a Record) -> Vec<Span<'a>> {
-    let folder = folder_name(&rec.cwd);
+fn location<'a>(m: &'a Model, cwd: &Path) -> Vec<Span<'a>> {
+    let folder = folder_name(cwd);
     let mut out = vec![
         Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)),
         Span::styled("\u{e0b0}", Color::Blue),
         Span::raw(" "),
     ];
-    if let Some(repo) = m.repo(rec)
+    if let Some(repo) = m.repo(cwd)
         && let Some(branch) = &repo.label
     {
         let c = repo.counts;

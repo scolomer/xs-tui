@@ -25,7 +25,7 @@ pub enum Kind {
     Sub,
 }
 
-/// Champs lus par agent-tui ; les autres (`depth`, `sessionId`, `updatedAt`…) sont ignorés.
+/// Champs lus par agent-tui ; les autres (`depth`, `updatedAt`…) sont ignorés.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
@@ -47,6 +47,7 @@ pub struct Zellij {
 pub struct Record {
     pub pid: i32,
     pub agent: Agent,
+    pub session_id: String,
     pub cwd: PathBuf,
     pub title: String,
     pub state: State,
@@ -54,6 +55,7 @@ pub struct Record {
     pub started_at: String,
 }
 
+#[expect(clippy::large_enum_variant, reason = "valeur transitoire, aussitôt déplacée dans le modèle")]
 pub enum Parsed {
     Ok(Record),
     /// Fichier illisible ou de version inconnue : affiché comme ligne d'erreur à la place du pid.

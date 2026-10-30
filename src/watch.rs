@@ -1,7 +1,9 @@
-//! Événements de la boucle principale : fichiers publiés, gitdirs, statut git, mort d'un pid, terminal.
+//! Événements de la boucle principale : fichiers publiés, épingles, gitdirs, statut git, mort d'un
+//! pid, terminal.
 //!
 //! Une seule instance `notify` (FSEvents sur macOS, inotify sur Linux) surveille le dossier
-//! d'exécution récursivement et les gitdirs des instances, sans récursion.
+//! d'exécution récursivement, le dossier agent d'omp (pour `session-pins.json`) et les gitdirs des
+//! instances, sans récursion.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -9,11 +11,15 @@ use std::sync::mpsc::Sender;
 use crossterm::event::{self as term, KeyEvent, KeyEventKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::pins::PINS_FILE;
+
 pub enum Event {
     /// Un fichier publié a changé : relire le dossier d'exécution.
     Fs,
     /// `HEAD` ou l'index d'un gitdir a changé : recalculer branches et statut.
     Head,
+    /// `session-pins.json` a changé : relire les sessions épinglées.
+    Pins,
     /// Résultat du thread de statut pour un `cwd` (`None` hors dépôt).
     Git(PathBuf, Option<crate::git::Repo>),
     ProcExit(i32),
@@ -21,8 +27,9 @@ pub enum Event {
     Resize,
 }
 
-/// Surveille `run_dir` (créé au besoin). Les événements arrêtent d'arriver quand le watcher est libéré.
-pub fn start(run_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWatcher> {
+/// Surveille `run_dir` (créé au besoin) et `agent_dir`. Les événements arrêtent d'arriver quand le
+/// watcher est libéré.
+pub fn start(run_dir: &Path, agent_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWatcher> {
     std::fs::create_dir_all(run_dir)?;
     // FSEvents rapporte des chemins canoniques : comparer avec la forme canonique du dossier.
     let root: PathBuf = run_dir.canonicalize()?;
@@ -30,15 +37,20 @@ pub fn start(run_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWat
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
         let head = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "HEAD" || n == "index"));
+        let pins = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == PINS_FILE));
         let published = event.paths.iter().any(|p| p.starts_with(&prefix) && !p.extension().is_some_and(|e| e == "tmp"));
         if head {
             let _ = tx.send(Event::Head);
+        }
+        if pins {
+            let _ = tx.send(Event::Pins);
         }
         if published {
             let _ = tx.send(Event::Fs);
         }
     })?;
     watcher.watch(&root, RecursiveMode::Recursive)?;
+    watcher.watch(agent_dir, RecursiveMode::NonRecursive)?;
     Ok(watcher)
 }
 

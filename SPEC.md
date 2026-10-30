@@ -218,12 +218,11 @@ son `sessionId`.
 ### Ligne d'une session dormante
 
 ```
-○  <dernier segment du cwd>   <branche> <titre>
+○  <dernier segment du cwd>   <branche> <titre> 󰐃
 ```
 
 - `○` gris à la place de l'indicateur d'état ; le reste suit le format d'une racine (segment
-  dossier, branche colorée, compteurs, titre aligné).
-- Pas d'épingle : `○` suffit, toutes les lignes dormantes sont épinglées.
+  dossier, branche colorée, compteurs, titre aligné, épingle grise en fin de ligne).
 - Dossier disparu (worktree supprimé) : aucun segment branche.
 
 ### Indicateur d'état

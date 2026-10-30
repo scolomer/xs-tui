@@ -1,14 +1,19 @@
 //! État affiché : instances connues, lignes d'erreur, pliage et curseur ; construction de l'arbre.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::git::Repo;
+use crate::pins::Pinned;
 use crate::record::{Kind, Record, State};
 
-/// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide.
+/// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide ; une session
+/// dormante a le pid `DORMANT_PID` et son id de session.
 pub type Key = (i32, String);
+
+/// pid des clés de sessions dormantes : aucun process n'a le pid 0.
+pub const DORMANT_PID: i32 = 0;
 
 /// Id de l'agent racine d'un process omp.
 pub const ROOT_ID: &str = "Main";
@@ -16,9 +21,14 @@ pub const ROOT_ID: &str = "Main";
 #[derive(Default)]
 pub struct Model {
     pub instances: HashMap<Key, Record>,
-    /// Dépôt git par `cwd` d'instance ; absent tant que le premier statut n'est pas calculé,
-    /// `None` hors dépôt.
+    /// Dépôt git par `cwd` d'instance ou de session épinglée ; absent tant que le premier statut
+    /// n'est pas calculé, `None` hors dépôt.
     pub repos: HashMap<PathBuf, Option<Repo>>,
+    /// Ids épinglés, dans l'ordre de `session-pins.json`.
+    pub pins: Vec<String>,
+    /// En-têtes des épingles non vivantes dont le fichier de session existe, dans l'ordre des
+    /// épingles.
+    pub headers: Vec<Pinned>,
     /// pid -> message ; la ligne d'erreur remplace les lignes du pid.
     pub errors: BTreeMap<i32, String>,
     /// pids dont la sortie est surveillée.
@@ -34,9 +44,48 @@ pub struct Model {
 
 impl Model {
     /// Dépôt du dossier `cwd`, s'il est connu et que `cwd` est dans un dépôt.
-    pub fn repo(&self, rec: &Record) -> Option<&Repo> {
-        self.repos.get(&rec.cwd).and_then(Option::as_ref)
+    pub fn repo(&self, cwd: &Path) -> Option<&Repo> {
+        self.repos.get(cwd).and_then(Option::as_ref)
     }
+
+    /// Vrai si la session `session_id` est épinglée.
+    pub fn is_pinned(&self, session_id: &str) -> bool {
+        self.pins.iter().any(|id| id == session_id)
+    }
+
+    /// Ids épinglés qu'aucune instance ne publie, dans l'ordre des épingles.
+    pub fn unpublished_pins(&self) -> impl Iterator<Item = &String> {
+        self.pins.iter().filter(|id| !self.is_live(id))
+    }
+
+    /// Session épinglée d'une ligne dormante.
+    pub fn dormant(&self, key: &Key) -> Option<&Pinned> {
+        if key.0 != DORMANT_PID {
+            return None;
+        }
+        self.headers.iter().find(|p| p.id == key.1)
+    }
+
+    /// Vrai si une instance publie la session `session_id`.
+    pub fn is_live(&self, session_id: &str) -> bool {
+        self.instances.values().any(|r| r.agent.kind == Kind::Main && r.session_id == session_id)
+    }
+
+    /// Dossiers dont le statut git est affiché : instances et sessions dormantes.
+    pub fn cwds(&self) -> HashSet<&Path> {
+        cwds(&self.instances, &self.headers)
+    }
+
+    /// Oublie le statut git des dossiers qui ne sont plus affichés.
+    pub fn retain_repos(&mut self) {
+        let cwds = cwds(&self.instances, &self.headers);
+        self.repos.retain(|cwd, _| cwds.contains(cwd.as_path()));
+    }
+}
+
+fn cwds<'a>(instances: &'a HashMap<Key, Record>, headers: &'a [Pinned]) -> HashSet<&'a Path> {
+    let instances = instances.values().map(|r| r.cwd.as_path());
+    instances.chain(headers.iter().map(|p| p.cwd.as_path())).collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,22 +93,24 @@ pub enum RowKind {
     Root,
     Sub { show_location: bool },
     Error,
+    Dormant,
 }
 
 #[derive(Clone, Debug)]
 pub struct Row {
     pub key: Key,
     pub kind: RowKind,
-    /// Ligne parente affichée (racine ou sous-agent) ; `None` pour une racine ou une erreur.
+    /// Ligne parente affichée (racine ou sous-agent) ; `None` pour une racine, une session
+    /// dormante ou une erreur.
     pub parent: Option<Key>,
     /// Sous-agents masqués par le pliage d'une racine.
     pub hidden_children: usize,
-    /// Guides d'arbre d'un sous-agent (`  │ └ `) ; vide pour une racine ou une erreur.
+    /// Guides d'arbre d'un sous-agent (`  │ └ `) ; vide pour les autres lignes.
     pub tree: String,
 }
 
 /// Lignes à afficher, dans l'ordre : racines par `startedAt`, chacune suivie de ses sous-agents,
-/// puis les lignes d'erreur par pid.
+/// puis les sessions dormantes dans l'ordre des épingles, puis les lignes d'erreur par pid.
 pub fn rows(m: &Model) -> Vec<Row> {
     let mut roots: Vec<&Record> = m
         .instances
@@ -98,6 +149,13 @@ pub fn rows(m: &Model) -> Vec<Row> {
         }
         push_children(&mut out, pid, root, ROOT_ID, "  ", &children);
     }
+    out.extend(m.headers.iter().filter(|p| !m.is_live(&p.id)).map(|p| Row {
+        key: (DORMANT_PID, p.id.clone()),
+        kind: RowKind::Dormant,
+        parent: None,
+        hidden_children: 0,
+        tree: String::new(),
+    }));
     out.extend(m.errors.keys().map(|&pid| Row {
         key: (pid, String::new()),
         kind: RowKind::Error,
@@ -198,6 +256,7 @@ mod tests {
                 name: "task".into(),
                 parent_id: parent.map(Into::into),
             },
+            session_id: "s".into(),
             cwd: "/tmp".into(),
             title: String::new(),
             state: State::Idle,
@@ -217,6 +276,10 @@ mod tests {
 
     fn keys(rows: &[Row]) -> Vec<(i32, &str)> {
         rows.iter().map(|r| (r.key.0, r.key.1.as_str())).collect()
+    }
+
+    fn headers(ids: &[&str]) -> Vec<Pinned> {
+        ids.iter().map(|id| Pinned { id: (*id).into(), cwd: "/tmp".into(), title: String::new() }).collect()
     }
 
     #[test]
@@ -282,5 +345,26 @@ mod tests {
         let after = rows(&m);
         select_after_rebuild(&mut m, &before, &after);
         assert_eq!(m.selected, Some((2, "Main".into())));
+    }
+
+    #[test]
+    fn dormant_sessions_follow_instances_in_pin_order() {
+        let mut m = model(vec![rec(1, "Main", None, "a"), rec(1, "A", Some("Main"), "b")]);
+        m.headers = headers(&["y", "s", "x"]);
+        m.errors.insert(2, "illisible".into());
+        // "s" est publiée par le pid 1 : vivante, sans ligne dormante.
+        assert_eq!(keys(&rows(&m)), [(1, "Main"), (1, "A"), (0, "y"), (0, "x"), (2, "")]);
+    }
+
+    #[test]
+    fn cursor_stays_in_bounds_when_last_dormant_disappears() {
+        let mut m = model(vec![rec(1, "Main", None, "a")]);
+        m.headers = headers(&["x", "y"]);
+        let before = rows(&m);
+        m.selected = Some((DORMANT_PID, "y".into()));
+        m.headers.pop();
+        let after = rows(&m);
+        select_after_rebuild(&mut m, &before, &after);
+        assert_eq!(m.selected, Some((DORMANT_PID, "x".into())));
     }
 }

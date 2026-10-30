@@ -6,6 +6,7 @@
 
 mod git;
 mod model;
+mod pins;
 mod proc;
 mod record;
 mod ui;
@@ -33,13 +34,20 @@ struct App {
     rows: Vec<Row>,
     list: ListState,
     run_dir: PathBuf,
+    /// `~/.omp` : baux de propriété des sessions dans `run/session-owners/`.
+    omp_dir: PathBuf,
+    /// `~/.omp/agent` : `session-pins.json` et fichiers de session.
+    agent_dir: PathBuf,
+    home: PathBuf,
     own_zellij: Option<String>,
     tx: Sender<Event>,
     watcher: RecommendedWatcher,
     /// Gitdirs déjà ajoutés au watcher.
     git_dirs: HashSet<PathBuf>,
-    /// Demandes au thread de statut git : dossiers des instances.
+    /// Demandes au thread de statut git : dossiers des instances et des sessions dormantes.
     git: Sender<Vec<PathBuf>>,
+    /// Épingles non publiées dont `model.headers` a été lu : relu quand cet ensemble change.
+    headers_for: Vec<String>,
 }
 
 fn main() {
@@ -47,9 +55,12 @@ fn main() {
         eprintln!("agent-tui: HOME non défini");
         std::process::exit(1);
     };
-    let run_dir = Path::new(&home).join(".omp/run/agent-tui");
+    let home = PathBuf::from(home);
+    let omp_dir = home.join(".omp");
+    let agent_dir = omp_dir.join("agent");
+    let run_dir = omp_dir.join("run/agent-tui");
     let (tx, rx) = mpsc::channel();
-    let watcher = match watch::start(&run_dir, tx.clone()) {
+    let watcher = match watch::start(&run_dir, &agent_dir, tx.clone()) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("agent-tui: surveillance de {} impossible : {err}", run_dir.display());
@@ -61,16 +72,22 @@ fn main() {
         rows: Vec::new(),
         list: ListState::default(),
         run_dir,
+        omp_dir,
+        agent_dir,
+        home,
         own_zellij: std::env::var("ZELLIJ_SESSION_NAME").ok(),
         tx: tx.clone(),
         watcher,
         git_dirs: HashSet::new(),
         git: git::spawn_refresher(tx.clone()),
+        headers_for: Vec::new(),
     };
 
     let mut terminal = ratatui::init();
     watch::spawn_terminal_reader(tx);
     app.rescan();
+    app.load_pins();
+    app.refresh_headers();
     app.request_git();
     app.rebuild();
     let result = app.run(&mut terminal, &rx);
@@ -99,10 +116,12 @@ impl App {
             // Les rafales d'événements fichiers sont fusionnées en une seule relecture.
             let mut fs = false;
             let mut head = false;
+            let mut pins = false;
             for event in first.into_iter().chain(rx.try_iter()) {
                 match event {
                     Event::Fs => fs = true,
                     Event::Head => head = true,
+                    Event::Pins => pins = true,
                     Event::Git(cwd, repo) => self.apply_git(cwd, repo),
                     Event::ProcExit(pid) => self.proc_exit(pid),
                     Event::Resize => {}
@@ -116,7 +135,11 @@ impl App {
             if fs {
                 self.rescan();
             }
-            if fs || head {
+            if pins {
+                self.load_pins();
+            }
+            let headers = self.refresh_headers();
+            if fs || head || pins || headers {
                 self.request_git();
             }
             if model::any_working(&self.model, &self.rows) {
@@ -191,14 +214,30 @@ impl App {
         }
         self.model.instances.retain(|key, _| seen.contains(key));
         self.model.errors = errors;
-        let cwds: HashSet<&PathBuf> = self.model.instances.values().map(|rec| &rec.cwd).collect();
-        self.model.repos.retain(|cwd, _| cwds.contains(cwd));
+        self.model.retain_repos();
     }
 
-    /// Demande le statut git de tous les dossiers d'instance (calcul immédiat sur le thread dédié).
+    /// Relit `session-pins.json`.
+    fn load_pins(&mut self) {
+        self.model.pins = pins::load(&self.agent_dir);
+    }
+
+    /// Relit les en-têtes des sessions épinglées non publiées quand leur ensemble a changé (épingles
+    /// modifiées, instance apparue ou disparue) : une session n'a de fichier qu'après sa première
+    /// écriture, l'en-tête n'est donc lu qu'au moment où elle devient dormante. Vrai si relu.
+    fn refresh_headers(&mut self) -> bool {
+        if self.model.unpublished_pins().eq(self.headers_for.iter()) {
+            return false;
+        }
+        self.headers_for = self.model.unpublished_pins().cloned().collect();
+        self.model.headers = self.headers_for.iter().filter_map(|id| pins::header(&self.agent_dir, id)).collect();
+        self.model.retain_repos();
+        true
+    }
+
+    /// Demande le statut git de tous les dossiers affichés (calcul immédiat sur le thread dédié).
     fn request_git(&self) {
-        let cwds: HashSet<&PathBuf> = self.model.instances.values().map(|rec| &rec.cwd).collect();
-        let _ = self.git.send(cwds.into_iter().cloned().collect());
+        let _ = self.git.send(self.model.cwds().into_iter().map(Path::to_path_buf).collect());
     }
 
     fn apply_git(&mut self, cwd: PathBuf, repo: Option<git::Repo>) {
@@ -253,9 +292,19 @@ impl App {
             }
             KeyCode::Enter => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
-                // Un sous-agent partage le pane de sa racine.
-                let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
-                if let Err(message) = zellij::focus(self.own_zellij.as_deref(), root.zellij.as_ref()) {
+                let result = if let Some(p) = self.model.dormant(&row.key) {
+                    if self.model.is_live(&p.id) || pins::lease_held(&self.omp_dir, &p.id) {
+                        Err("Session déjà ouverte par un autre omp".to_string())
+                    } else {
+                        let cwd = if p.cwd.is_dir() { &p.cwd } else { &self.home };
+                        zellij::resume(self.own_zellij.as_deref(), &p.id, cwd)
+                    }
+                } else {
+                    // Un sous-agent partage le pane de sa racine.
+                    let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
+                    zellij::focus(self.own_zellij.as_deref(), root.zellij.as_ref())
+                };
+                if let Err(message) = result {
                     self.notify(message);
                 }
             }
