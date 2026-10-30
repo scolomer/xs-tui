@@ -14,7 +14,7 @@ import { reduce, type Tracker } from "./state";
 
 const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agent-tui");
 const FORMAT_VERSION = 1;
-const TITLE_POLL_MS = 5000;
+const TITLE_POLL_MS = 500;
 
 /** Whether this process's main session publishes; subagents follow it (SPEC § Activation). */
 let rootPublishes = false;

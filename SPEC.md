@@ -118,7 +118,7 @@ L'état `error` est remplacé au tour suivant (`agent_start`).
 
 ### Titre
 
-`title` est relu à chaque publication d'état et, pour une session main, par un timer de 5 s qui
+`title` est relu à chaque publication d'état et, pour une session main, par un timer de 500 ms qui
 republie le fichier si `getSessionName()` a changé. Ce timer capte le titre généré
 automatiquement après le premier tour et les `/rename` faits au repos.
 
@@ -312,7 +312,7 @@ Sans aucune instance ni session dormante : « Aucune instance omp » centré, ba
   directement son `RunStatus`. Un changement dans omp peut faire diverger l'état affiché sans erreur.
 - L'état (publié par l'extension) et la branche (lue par agent-tui) viennent de deux sources
   distinctes.
-- Un `/rename` fait au repos apparaît avec au plus 5 s de retard.
+- Un `/rename` fait au repos apparaît avec au plus 500 ms de retard.
 - Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et
   restée sans écriture depuis apparaît dormante : omp ne prend son bail qu'à la première écriture.
   Entrée la rouvrirait alors une seconde fois.
