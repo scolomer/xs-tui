@@ -64,11 +64,13 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     // Spans hors indicateur : atténués si l'instance est hors de portée.
     let mut before = Vec::new();
     let mut after = Vec::new();
-    let show_location = match row.kind {
-        RowKind::Root => true,
-        RowKind::Sub { depth, show_location } => {
-            before.push(Span::raw(format!("{}├ ", "  ".repeat(depth as usize))));
-            show_location
+    // Un sous-agent n'existe que pendant son travail : son indicateur ne sert qu'à signaler une
+    // attente de l'utilisateur.
+    let (show_location, show_indicator) = match row.kind {
+        RowKind::Root => (true, true),
+        RowKind::Sub { show_location } => {
+            before.push(Span::raw(row.tree.clone()));
+            (show_location, rec.state == State::Blocked)
         }
         RowKind::Error => unreachable!(),
     };
@@ -94,8 +96,10 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
 
     let dimmed = |spans: Vec<Span<'a>>| spans.into_iter().map(move |s| if dim { s.dim() } else { s });
     let mut spans: Vec<Span> = dimmed(before).collect();
-    spans.push(indicator(rec.state, m.tick));
-    spans.extend(dimmed(vec![Span::raw(" ")]));
+    if show_indicator {
+        spans.push(indicator(rec.state, m.tick));
+        spans.extend(dimmed(vec![Span::raw(" ")]));
+    }
     spans.extend(dimmed(after));
     Line::from(spans)
 }

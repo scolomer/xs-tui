@@ -42,7 +42,7 @@ impl Model {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RowKind {
     Root,
-    Sub { depth: u32, show_location: bool },
+    Sub { show_location: bool },
     Error,
 }
 
@@ -54,6 +54,8 @@ pub struct Row {
     pub parent: Option<Key>,
     /// Sous-agents masqués par le pliage d'une racine.
     pub hidden_children: usize,
+    /// Guides d'arbre d'un sous-agent (`  │ └ `) ; vide pour une racine ou une erreur.
+    pub tree: String,
 }
 
 /// Lignes à afficher, dans l'ordre : racines par `startedAt`, chacune suivie de ses sous-agents,
@@ -82,6 +84,7 @@ pub fn rows(m: &Model) -> Vec<Row> {
             kind: RowKind::Root,
             parent: None,
             hidden_children: if folded { subs.len() } else { 0 },
+            tree: String::new(),
         });
         if folded {
             continue;
@@ -93,13 +96,14 @@ pub fn rows(m: &Model) -> Vec<Row> {
         for list in children.values_mut() {
             list.sort_by(|a, b| (&a.started_at, &a.agent.id).cmp(&(&b.started_at, &b.agent.id)));
         }
-        push_children(&mut out, pid, root, ROOT_ID, 1, &children);
+        push_children(&mut out, pid, root, ROOT_ID, "  ", &children);
     }
     out.extend(m.errors.keys().map(|&pid| Row {
         key: (pid, String::new()),
         kind: RowKind::Error,
         parent: None,
         hidden_children: 0,
+        tree: String::new(),
     }));
     out
 }
@@ -125,24 +129,29 @@ fn attach_point<'a>(id: &'a str, subs: &HashMap<&'a str, &'a Record>) -> &'a str
     ROOT_ID
 }
 
+/// Ajoute les sous-agents de `parent_id` ; `guides` est le préfixe hérité des ancêtres : `│ `
+/// pour un ancêtre qui a encore des frères en dessous, deux espaces sinon.
 fn push_children(
     out: &mut Vec<Row>,
     pid: i32,
     parent: &Record,
     parent_id: &str,
-    depth: u32,
+    guides: &str,
     children: &HashMap<&str, Vec<&Record>>,
 ) {
     let Some(list) = children.get(parent_id) else { return };
-    for child in list {
+    for (i, child) in list.iter().enumerate() {
+        let last = i + 1 == list.len();
         let id = child.agent.id.as_str();
         out.push(Row {
             key: (pid, id.to_string()),
-            kind: RowKind::Sub { depth, show_location: child.cwd != parent.cwd },
+            kind: RowKind::Sub { show_location: child.cwd != parent.cwd },
             parent: Some((pid, parent_id.to_string())),
             hidden_children: 0,
+            tree: format!("{guides}{}", if last { "└ " } else { "├ " }),
         });
-        push_children(out, pid, child, id, depth + 1, children);
+        let guides = format!("{guides}{}", if last { "  " } else { "│ " });
+        push_children(out, pid, child, id, &guides, children);
     }
 }
 
@@ -226,8 +235,16 @@ mod tests {
         ]);
         let rows = rows(&m);
         assert_eq!(keys(&rows), [(1, "Main"), (1, "A"), (1, "A.1"), (1, "Orphan")]);
-        assert_eq!(rows[2].kind, RowKind::Sub { depth: 2, show_location: false });
-        assert_eq!(rows[3].kind, RowKind::Sub { depth: 1, show_location: false });
+        // A a un frère après lui : sa branche se prolonge (│) jusqu'à Orphan, le dernier (└).
+        let trees: Vec<&str> = rows.iter().map(|r| r.tree.as_str()).collect();
+        assert_eq!(trees, ["", "  ├ ", "  │ └ ", "  └ "]);
+    }
+
+    #[test]
+    fn guides_stop_under_a_last_child() {
+        let m = model(vec![rec(1, "Main", None, "a"), rec(1, "A", Some("Main"), "b"), rec(1, "A.1", Some("A"), "c")]);
+        let trees: Vec<String> = rows(&m).into_iter().map(|r| r.tree).collect();
+        assert_eq!(trees, ["", "  └ ", "    └ "]);
     }
 
     #[test]

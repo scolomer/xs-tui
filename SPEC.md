@@ -205,13 +205,19 @@ Le redessin périodique n'a lieu que tant qu'au moins un agent visible est `work
 ### Ligne d'un sous-agent
 
 ```
-  ├ <état> <id> <type>
+  ├ <id> <type>
+  │ └ ● <id> <type>
+  └ <id> <type>
 ```
 
-- Indentation selon la profondeur dans l'arbre.
+- Guides d'arbre : `└` pour le dernier enfant, `├` sinon ; `│` prolonge la branche d'un ancêtre
+  qui a encore des frères en dessous.
+- Pas d'indicateur : un sous-agent n'existe que pendant son travail. Seul l'état `blocked`
+  (approbation en attente) affiche le `●` magenta.
 - `<id>` est `agent.id`, `<type>` est `agent.name` en grisé.
 - Le dossier et la branche ne sont affichés que si le `cwd` du sous-agent diffère de celui de son
-  parent (worktree isolé) ; ils prennent alors le format du segment de la racine.
+  parent (tâche isolée dans un worktree, `task.isolation.enabled`) ; ils prennent alors le format
+  du segment de la racine.
 
 ### Ordre
 
