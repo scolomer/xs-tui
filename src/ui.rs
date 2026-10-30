@@ -22,7 +22,16 @@ pub fn draw(frame: &mut Frame, m: &Model, rows: &[Row], own_zellij: Option<&str>
         let middle = Rect { y: list_area.y + list_area.height / 2, height: 1.min(list_area.height), ..list_area };
         frame.render_widget(Paragraph::new("Aucune instance omp").dim().alignment(Alignment::Center), middle);
     } else {
-        let items: Vec<ListItem> = rows.iter().map(|row| ListItem::new(row_line(m, row, own_zellij))).collect();
+        // Les titres des racines commencent tous à la même colonne, après le plus large dossier/branche.
+        let title_col = rows
+            .iter()
+            .filter(|r| r.kind == RowKind::Root)
+            .filter_map(|r| m.instances.get(&r.key))
+            .map(|inst| width(&location(inst)))
+            .max()
+            .unwrap_or(0);
+        let items: Vec<ListItem> =
+            rows.iter().map(|row| ListItem::new(row_line(m, row, own_zellij, title_col))).collect();
         list.select(m.selected.as_ref().and_then(|key| rows.iter().position(|r| &r.key == key)));
         let widget = List::new(items)
             .highlight_symbol("› ")
@@ -43,7 +52,7 @@ fn indicator(state: State, tick: usize) -> Span<'static> {
     }
 }
 
-fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>) -> Line<'a> {
+fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize) -> Line<'a> {
     let pid = row.key.0;
     let Some(inst) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) else {
         let message = m.errors.get(&pid).map_or("", String::as_str);
@@ -64,10 +73,14 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>) -> Line<'a> {
         RowKind::Error => unreachable!(),
     };
     if show_location {
-        location(inst, &mut after);
+        after = location(inst);
     }
     match row.kind {
         RowKind::Root => {
+            let pad = title_col.saturating_sub(width(&after));
+            if pad > 0 {
+                after.push(Span::raw(" ".repeat(pad)));
+            }
             after.push(Span::raw(inst.rec.title.as_str()));
             if row.hidden_children > 0 {
                 after.push(Span::raw(format!(" ▸ {}", row.hidden_children)).dim());
@@ -89,14 +102,21 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>) -> Line<'a> {
 }
 
 /// Segment powerline du dossier, puis branche git s'il y en a une.
-fn location<'a>(inst: &'a Instance, out: &mut Vec<Span<'a>>) {
+fn location(inst: &Instance) -> Vec<Span<'_>> {
     let folder = folder_name(&inst.rec.cwd);
-    out.push(Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)));
-    out.push(Span::styled("\u{e0b0}", Color::Blue));
-    out.push(Span::raw(" "));
+    let mut out = vec![
+        Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)),
+        Span::styled("\u{e0b0}", Color::Blue),
+        Span::raw(" "),
+    ];
     if let Some(branch) = &inst.branch {
         out.push(Span::raw(format!("\u{f126} {branch} ")));
     }
+    out
+}
+
+fn width(spans: &[Span]) -> usize {
+    spans.iter().map(Span::width).sum()
 }
 
 fn folder_name(cwd: &Path) -> String {
