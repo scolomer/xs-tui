@@ -10,6 +10,8 @@ permet d'aller au pane zellij d'une instance.
 - Chaque ligne indique l'état de l'agent : `idle`, `working`, `blocked`, `error`.
 - Mise à jour dynamique : apparition, disparition et changement d'état des instances sans action de l'utilisateur.
 - Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
+- Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
+  agent-tui.
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de prompts ou de commandes à omp, affichage du détail de l'état (outil en
@@ -175,6 +177,26 @@ modification de fichier sans publication ni `git add` apparaît donc avec au plu
 Un fichier dont `v` est inconnu ou dont le JSON est illisible produit une ligne d'erreur à la place
 de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visible.
 
+### Sessions épinglées
+
+La source est le `/pin` d'omp, qui bascule l'épingle de la session courante (`/pin <id>` pour une
+autre session) et range les ids épinglés dans `~/.omp/agent/session-pins.json` (tableau JSON, ordre
+d'épinglage). agent-tui surveille ce fichier sans sondage et ne l'écrit jamais : épingler et
+désépingler se font uniquement depuis omp.
+
+- Session épinglée vivante : une instance dont le `sessionId` publié est épinglé. Elle reste une
+  ligne vivante normale, marquée d'une épingle.
+- Session dormante : session épinglée qu'aucune instance ne publie. Son dossier et son titre sont
+  lus dans son fichier `~/.omp/agent/sessions/*/*_<id>.jsonl` : la ligne 1 porte le titre
+  (`{"type":"title",…}`), la ligne 2 l'en-tête avec le `cwd` (`{"type":"session",…}`). Branche et
+  compteurs git sont calculés depuis ce `cwd` comme pour une instance.
+- Une épingle dont le fichier de session n'existe plus est ignorée.
+
+Avant de reprendre une session dormante, agent-tui vérifie qu'elle n'est pas déjà ouverte : elle
+l'est si son bail de propriété `~/.omp/run/session-owners/<id>.lock` est verrouillé (`flock`
+exclusif non bloquant, relâché aussitôt ; omp le tient jusqu'à sa mort) ou si une instance publie
+son `sessionId`.
+
 ## Affichage
 
 ### Ligne d'une instance (racine)
@@ -190,6 +212,19 @@ de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visib
 - Le segment ` <branche>` est absent hors dépôt git.
 - Le titre est affiché tel quel ; rien tant que la session n'a pas de titre.
 - La ligne est tronquée à droite si elle dépasse la largeur.
+- Une session épinglée se termine par une épingle `nf-md-pin` (U+F0403) grise, après le titre et
+  après un éventuel `▸ N`.
+
+### Ligne d'une session dormante
+
+```
+○  <dernier segment du cwd>   <branche> <titre>
+```
+
+- `○` gris à la place de l'indicateur d'état ; le reste suit le format d'une racine (segment
+  dossier, branche colorée, compteurs, titre aligné).
+- Pas d'épingle : `○` suffit, toutes les lignes dormantes sont épinglées.
+- Dossier disparu (worktree supprimé) : aucun segment branche.
 
 ### Indicateur d'état
 
@@ -224,6 +259,10 @@ Le redessin périodique n'a lieu que tant qu'au moins un agent visible est `work
 Les racines sont triées par `startedAt` : chaque instance garde sa position, les nouvelles
 s'ajoutent en bas. Les sous-agents suivent le même ordre sous leur parent.
 
+Les sessions dormantes forment un bloc sous les instances, dans l'ordre de `session-pins.json`.
+Fermer un omp épinglé fait descendre sa ligne dans ce bloc ; le reprendre la fait remonter en bas
+des instances.
+
 ### Instances hors de portée
 
 Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'agent-tui, ou hors
@@ -231,11 +270,12 @@ zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
 
 ### Liste vide
 
-Sans aucune instance : « Aucune instance omp » centré, barre du bas visible.
+Sans aucune instance ni session dormante : « Aucune instance omp » centré, barre du bas visible.
 
 ### Barre du bas
 
-- À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états.
+- À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
+  dormantes ne sont pas comptées.
 - À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
@@ -245,16 +285,26 @@ Sans aucune instance : « Aucune instance omp » centré, barre du bas visible.
 | Touche | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
-| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. |
-| `Espace` | Plier ou déplier les sous-agents d'une racine. |
+| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une session dormante, la reprend (voir ci-dessous). |
+| `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `q`, `Ctrl-C` | Quitter. |
 
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
   (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'agent-tui tourne.
-- Le curseur suit l'élément sélectionné (clé `pid` + `agent.id`) quand la liste change. Si
-  l'élément disparaît, le curseur passe à son parent, sinon à la ligne voisine.
+- Le curseur suit l'élément sélectionné (clé `pid` + `agent.id` pour une instance, id de session
+  pour une session dormante) quand la liste change. Si l'élément disparaît, le curseur passe à
+  son parent, sinon à la ligne voisine.
 - Entrée sur une instance d'une autre session zellij affiche « Instance dans la session zellij
   “<nom>” » ; sur une instance hors zellij, « Instance hors zellij ». Aucune autre action.
+- Entrée sur une session dormante, comme le script `zellij-resume.sh` d'omp-sessions :
+  - déjà ouverte (voir « Sessions épinglées ») : « Session déjà ouverte par un autre omp », aucune
+    autre action ;
+  - agent-tui hors zellij : « agent-tui hors zellij : reprise impossible » ;
+  - sinon : nouvel onglet dans la session zellij d'agent-tui, ouvert dans le `cwd` de la session
+    (`$HOME` s'il n'existe plus) :
+    `zellij action new-tab --cwd <cwd> -- fish -C "cd <cwd>; and omp --resume <id>"`. fish reste
+    ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne redevient
+    une instance.
 - agent-tui reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
 
 ## Risques connus
@@ -264,3 +314,6 @@ Sans aucune instance : « Aucune instance omp » centré, barre du bas visible.
 - L'état (publié par l'extension) et la branche (lue par agent-tui) viennent de deux sources
   distinctes.
 - Un `/rename` fait au repos apparaît avec au plus 5 s de retard.
+- Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et
+  restée sans écriture depuis apparaît dormante : omp ne prend son bail qu'à la première écriture.
+  Entrée la rouvrirait alors une seconde fois.
