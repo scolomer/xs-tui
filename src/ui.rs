@@ -77,10 +77,9 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     }
     match row.kind {
         RowKind::Root => {
-            let pad = title_col.saturating_sub(width(&after));
-            if pad > 0 {
-                after.push(Span::raw(" ".repeat(pad)));
-            }
+            // Un espace de plus que la plus large branche, pour bien séparer le titre.
+            let pad = (title_col + 1).saturating_sub(width(&after));
+            after.push(Span::raw(" ".repeat(pad)));
             after.push(Span::raw(inst.rec.title.as_str()));
             if row.hidden_children > 0 {
                 after.push(Span::raw(format!(" ▸ {}", row.hidden_children)).dim());
