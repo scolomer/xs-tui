@@ -1,4 +1,4 @@
-//! Branche git d'un dossier et état propre/modifié, lus avec gix (aucun process git lancé).
+//! Branche git d'un dossier et compteurs de statut, lus avec gix (aucun process git lancé).
 //!
 //! Le statut parcourt le worktree : il est calculé sur un thread dédié, toutes les 10 s comme la
 //! barre d'état d'omp, et aussitôt sur demande (HEAD ou index modifié, nouvelle publication).
@@ -18,14 +18,31 @@ pub struct Repo {
     /// Gitdir propre au worktree (`.git/worktrees/<n>` pour un worktree) : son HEAD est surveillé.
     pub git_dir: PathBuf,
     pub label: Option<String>,
-    /// Fichiers indexés, modifiés ou non suivis, comme le segment git d'omp.
-    pub dirty: bool,
+    pub counts: Counts,
+}
+
+/// Compteurs du segment git d'omp, au sens de `git status --porcelain` : un fichier indexé puis
+/// modifié compte dans `staged` et dans `unstaged` ; un dossier non suivi compte pour un.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Counts {
+    /// HEAD ↔ index (colonne X).
+    pub staged: usize,
+    /// Index ↔ worktree (colonne Y), conflits compris.
+    pub unstaged: usize,
+    /// Entrées `??`.
+    pub untracked: usize,
+}
+
+impl Counts {
+    pub fn dirty(&self) -> bool {
+        self.staged + self.unstaged + self.untracked > 0
+    }
 }
 
 /// Dépôt contenant `cwd`, ou `None` hors dépôt.
 pub fn inspect(cwd: &Path) -> Option<Repo> {
     let repo = gix::discover(cwd).ok()?;
-    Some(Repo { git_dir: repo.git_dir().to_path_buf(), label: head_label(&repo), dirty: is_dirty(&repo) })
+    Some(Repo { git_dir: repo.git_dir().to_path_buf(), label: head_label(&repo), counts: counts(&repo) })
 }
 
 /// Équivalent de `git branch --show-current`, ou `@<git rev-parse --short HEAD>` si HEAD est détaché.
@@ -37,11 +54,40 @@ fn head_label(repo: &gix::Repository) -> Option<String> {
     }
 }
 
-/// Vrai dès le premier changement HEAD↔index, index↔worktree ou fichier non suivi.
-fn is_dirty(repo: &gix::Repository) -> bool {
-    repo.status(gix::progress::Discard)
-        .and_then(|status| status.into_iter(None))
-        .is_ok_and(|mut changes| changes.any(|change| change.is_ok()))
+/// Compteurs de statut ; zéro partout si le statut ne peut pas être calculé.
+fn counts(repo: &gix::Repository) -> Counts {
+    use gix::dir::entry::Status as DirStatus;
+    use gix::status::Item;
+    use gix::status::index_worktree::Item as Worktree;
+    use gix::status::plumbing::index_as_worktree::EntryStatus;
+
+    let mut counts = Counts::default();
+    let Ok(changes) = repo.status(gix::progress::Discard).and_then(|status| status.into_iter(None)) else {
+        return counts;
+    };
+    for change in changes.flatten() {
+        match change {
+            Item::TreeIndex(_) => counts.staged += 1,
+            Item::IndexWorktree(Worktree::Modification { status, .. }) => {
+                // Stat seule différente, contenu identique : pas une modification pour git.
+                if !matches!(status, EntryStatus::NeedsUpdate(_)) {
+                    counts.unstaged += 1;
+                }
+            }
+            Item::IndexWorktree(Worktree::DirectoryContents { entry, .. }) => {
+                if entry.status == DirStatus::Untracked {
+                    counts.untracked += 1;
+                }
+            }
+            // Renommages détectés dans le worktree : désactivés par défaut, comptés comme git
+            // le ferait sans détection (une suppression et un fichier non suivi).
+            Item::IndexWorktree(Worktree::Rewrite { .. }) => {
+                counts.unstaged += 1;
+                counts.untracked += 1;
+            }
+        }
+    }
+    counts
 }
 
 /// Lance le thread de statut. Chaque envoi sur le canal retourné fixe les dossiers suivis et

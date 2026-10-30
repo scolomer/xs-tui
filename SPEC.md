@@ -162,6 +162,9 @@ code de lecture de HEAD est recopié de `head_label` d'omp-sessions.
 - HEAD détaché : `@<sha court>`.
 - Couleur comme dans la barre d'état d'omp : verte si le dépôt est propre, jaune s'il a des
   fichiers indexés, modifiés ou non suivis.
+- Compteurs non nuls après la branche, comme omp : `*<modifiés>` jaune, `+<indexés>` vert,
+  `?<non suivis>` gris. Ils suivent `git status --porcelain` : un fichier indexé puis modifié
+  compte dans les deux, un dossier non suivi compte pour un.
 
 Le statut parcourt le worktree : il est calculé hors de la boucle d'affichage, toutes les 10 s
 (cadence d'omp), et aussitôt quand HEAD ou l'index changent ou qu'une instance publie. Une

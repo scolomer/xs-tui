@@ -100,8 +100,9 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     Line::from(spans)
 }
 
-/// Segment powerline du dossier, puis branche git s'il y en a une : verte si le dépôt est propre,
-/// jaune s'il a des modifications (couleurs `statusLineGitClean`/`statusLineGitDirty` d'omp).
+/// Segment powerline du dossier, puis branche git s'il y en a une, comme le segment git d'omp :
+/// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
+/// `+indexés` et `?non suivis` non nuls.
 fn location<'a>(m: &'a Model, rec: &'a Record) -> Vec<Span<'a>> {
     let folder = folder_name(&rec.cwd);
     let mut out = vec![
@@ -112,8 +113,15 @@ fn location<'a>(m: &'a Model, rec: &'a Record) -> Vec<Span<'a>> {
     if let Some(repo) = m.repo(rec)
         && let Some(branch) = &repo.label
     {
-        let color = if repo.dirty { Color::Yellow } else { Color::Green };
-        out.push(Span::styled(format!("\u{f126} {branch}"), color));
+        let c = repo.counts;
+        out.push(Span::styled(format!("\u{f126} {branch}"), if c.dirty() { Color::Yellow } else { Color::Green }));
+        for (n, sign, color) in
+            [(c.unstaged, '*', Color::Yellow), (c.staged, '+', Color::Green), (c.untracked, '?', Color::DarkGray)]
+        {
+            if n > 0 {
+                out.push(Span::styled(format!(" {sign}{n}"), color));
+            }
+        }
         out.push(Span::raw(" "));
     }
     out
