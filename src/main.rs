@@ -95,6 +95,13 @@ fn main() {
     app.refresh_headers();
     app.request_git();
     app.rebuild();
+    // Seulement au démarrage : la fonction fish de l'onglet remet son nom à la commande suivante.
+    if app.own_zellij.is_some()
+        && let Ok(pane) = std::env::var("ZELLIJ_PANE_ID")
+        && let Err(message) = zellij::rename_tab_of(&pane, zellij::TAB_NAME)
+    {
+        app.notify(message);
+    }
     let result = app.run(&mut terminal, &rx);
     ratatui::restore();
     if let Err(err) = result {

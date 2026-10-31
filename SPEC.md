@@ -337,6 +337,9 @@ curseur.
     ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne redevient
     une instance.
 - agz reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
+- Au démarrage dans zellij, agz renomme son onglet en `agentz` (`zellij action
+  rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
+  en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.
 
 ## Risques connus
 
