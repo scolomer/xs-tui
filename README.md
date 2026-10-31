@@ -62,7 +62,8 @@ mise run install
 ```
 
 This installs `agz` into `~/.cargo/bin` and links the extension as
-`~/.omp/agent/extensions/agentz`. omp instances started before the link exist do not load the
+`~/.omp/agent/extensions/agentz`. To install only the extension, run
+`mise run extension:install`. omp instances started before the link exist do not load the
 extension and do not appear until they restart.
 
 ## Usage
