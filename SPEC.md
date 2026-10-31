@@ -12,6 +12,7 @@ permet d'aller au pane zellij d'une instance.
 - Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
   agz.
+- Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de prompts ou de commandes à omp, affichage du détail de l'état (outil en
@@ -30,6 +31,7 @@ flowchart LR
   K[kqueue NOTE_EXIT / pidfd] -->|mort du pid| T
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
+  Z -.->|zellij action dump-screen, copie ouverte| T
 ```
 
 omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, OSC 7501) : aucun
@@ -274,11 +276,36 @@ zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
 
 Sans aucune instance ni session dormante : « Aucune instance omp » centré, barre du bas visible.
 
+### Copie de session
+
+`d` sépare l'écran en deux : la liste en haut, à la hauteur de ses lignes (au plus un tiers de
+l'écran, elle défile au-delà), puis une ligne vide, une ligne de séparation et la copie de l'écran
+d'omp, sur toute la largeur, jusqu'à la barre du bas. La copie est en lecture seule et suit le
+curseur.
+
+- Source : l'écran visible du pane zellij de l'instance sélectionnée, relu par
+  `zellij --session <session> action dump-screen --pane-id terminal_<paneId> --ansi` toutes les
+  250 ms tant que la copie est ouverte. Un sous-agent montre le pane de sa racine. Une instance
+  d'une autre session zellij est copiée aussi.
+- C'est le seul sondage d'agz : zellij ne redessine pas un onglet qui n'est pas affiché, et
+  `zellij subscribe` ne diffuse donc rien pour le pane d'un omp dans un autre onglet.
+- Rendu : les couleurs d'omp sont conservées, sans atténuation. omp écrit de haut en bas sans
+  forcément remplir l'écran : la copie montre ses dernières lignes non vides, coupées à droite si
+  le pane est plus large que la zone. Pas d'historique.
+- Ligne de séparation : `── <titre de la session> ───`, puis à droite la taille source et celle de
+  la zone (`187×57 → 120×24`) seulement quand la largeur est coupée.
+- Messages centrés grisés à la place de la copie : « Session dormante », « Ligne d'erreur »,
+  « Instance hors zellij », « Aucune session sélectionnée » (liste vide ; la copie reprend quand
+  une instance apparaît), « zellij introuvable », « Copie interrompue : <raison> » (pane fermé,
+  erreur de zellij). Après un échec, la copie ne relit plus l'écran jusqu'au prochain changement
+  de ligne ou à une réouverture.
+- La copie n'est pas mémorisée : agz démarre avec la liste seule.
+
 ### Barre du bas
 
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
   dormantes ne sont pas comptées.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  q quitter`.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
 
@@ -289,6 +316,8 @@ Sans aucune instance ni session dormante : « Aucune instance omp » centré, ba
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une session dormante, la reprend (voir ci-dessous). |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
+| `d` | Ouvrir ou fermer la copie de session (voir « Copie de session »). |
+| `Échap` | Fermer la copie de session. |
 | `q`, `Ctrl-C` | Quitter. |
 
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
@@ -316,6 +345,8 @@ Sans aucune instance ni session dormante : « Aucune instance omp » centré, ba
 - L'état (publié par l'extension) et la branche (lue par agz) viennent de deux sources
   distinctes.
 - Un `/rename` fait au repos apparaît avec au plus 500 ms de retard.
+- La copie de session est relue toutes les 250 ms : un écran qui change entre deux lectures n'y
+  apparaît pas, et le pane est coupé s'il est plus grand que la zone de copie.
 - Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et
   restée sans écriture depuis apparaît dormante : omp ne prend son bail qu'à la première écriture.
   Entrée la rouvrirait alors une seconde fois.

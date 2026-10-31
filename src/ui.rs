@@ -1,4 +1,4 @@
-//! Rendu : arbre des instances et barre du bas (SPEC.md § Affichage).
+//! Rendu : arbre des instances, copie de session et barre du bas (SPEC.md § Affichage).
 
 use std::path::Path;
 
@@ -8,19 +8,47 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 
-use crate::model::{Model, ROOT_ID, Row, RowKind};
+use crate::mirror::{Mirror, View};
+use crate::model::{self, Model, ROOT_ID, Row, RowKind};
 use crate::record::State;
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  q quitter";
+const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  d détail  q quitter";
 
-pub fn draw(frame: &mut Frame, m: &Model, rows: &[Row], own_zellij: Option<&str>, list: &mut ListState) {
-    let [list_area, bar_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+pub fn draw(
+    frame: &mut Frame,
+    m: &Model,
+    rows: &[Row],
+    own_zellij: Option<&str>,
+    list: &mut ListState,
+    mirror: Option<&Mirror>,
+) {
+    let area = frame.area();
+    let (list_area, copy, bar_area) = match mirror {
+        None => {
+            let [list_area, bar_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            (list_area, None, bar_area)
+        }
+        Some(mirror) => {
+            // La liste prend la hauteur de ses lignes, au plus un tiers de l'écran ; elle défile au-delà.
+            // Une ligne vide la sépare du trait.
+            let cap = usize::from((area.height.saturating_sub(1) / 3).max(1));
+            let height = rows.len().clamp(1, cap) as u16;
+            let [list_area, _, separator_area, copy_area, bar_area] = Layout::vertical([
+                Constraint::Length(height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+            (list_area, Some((mirror, separator_area, copy_area)), bar_area)
+        }
+    };
 
     if rows.is_empty() {
-        let middle = Rect { y: list_area.y + list_area.height / 2, height: 1.min(list_area.height), ..list_area };
-        frame.render_widget(Paragraph::new("Aucune instance omp").dim().alignment(Alignment::Center), middle);
+        centered(frame, "Aucune instance omp", list_area);
     } else {
         // Les titres des racines et des sessions dormantes commencent tous à la même colonne,
         // après le plus large dossier/branche.
@@ -43,8 +71,62 @@ pub fn draw(frame: &mut Frame, m: &Model, rows: &[Row], own_zellij: Option<&str>
             .highlight_style(Style::new().add_modifier(Modifier::BOLD));
         frame.render_stateful_widget(widget, list_area, list);
     }
-
+    if let Some((mirror, separator_area, copy_area)) = copy {
+        draw_copy(frame, m, rows, mirror, separator_area, copy_area);
+    }
     draw_bar(frame, m, rows, bar_area);
+}
+
+/// Ligne de séparation puis écran visible du pane copié, coupé en haut et à droite.
+fn draw_copy(frame: &mut Frame, m: &Model, rows: &[Row], mirror: &Mirror, separator_area: Rect, area: Rect) {
+    let row = m.selected.as_ref().and_then(|k| rows.iter().find(|r| &r.key == k));
+    let crop = match &mirror.view {
+        View::Screen(text) if text.width() > usize::from(area.width) => {
+            Some(format!(" {}×{} → {}×{} ", text.width(), text.lines.len(), area.width, area.height))
+        }
+        _ => None,
+    };
+    let line = separator(model::copy_title(m, row), crop.as_deref(), separator_area.width);
+    frame.render_widget(Paragraph::new(line), separator_area);
+    match &mirror.view {
+        View::Waiting => {}
+        View::Message(message) => centered(frame, message, area),
+        View::Screen(text) => {
+            // omp écrit de haut en bas et termine par son éditeur et son statut, sans forcément
+            // remplir l'écran : on garde les dernières lignes non vides.
+            let used = text
+                .lines
+                .iter()
+                .rposition(|l| l.spans.iter().any(|s| !s.content.trim().is_empty()))
+                .map_or(0, |i| i + 1);
+            let skip = used.saturating_sub(usize::from(area.height));
+            let buf = frame.buffer_mut();
+            for (y, line) in (area.y..area.bottom()).zip(text.lines.iter().skip(skip)) {
+                buf.set_line(area.x, y, line, area.width);
+            }
+        }
+    }
+}
+
+/// `── <titre> ──────── <taille source → zone> ──`, la taille seulement si la largeur est coupée.
+fn separator<'a>(title: Option<&'a str>, crop: Option<&str>, width: u16) -> Line<'a> {
+    let gray = Style::new().fg(Color::DarkGray);
+    let mut spans = vec![Span::styled("── ", gray)];
+    if let Some(title) = title.filter(|t| !t.is_empty()) {
+        spans.push(Span::raw(title));
+        spans.push(Span::raw(" "));
+    }
+    let right = crop.map(|c| [Span::styled(c.to_string(), gray), Span::styled("──", gray)]);
+    let used = self::width(&spans) + right.as_ref().map_or(0, |r| self::width(r));
+    spans.push(Span::styled("─".repeat(usize::from(width).saturating_sub(used)), gray));
+    spans.extend(right.into_iter().flatten());
+    Line::from(spans)
+}
+
+/// Message grisé centré dans `area`.
+fn centered(frame: &mut Frame, message: &str, area: Rect) {
+    let middle = Rect { y: area.y + area.height / 2, height: 1.min(area.height), ..area };
+    frame.render_widget(Paragraph::new(message).dim().alignment(Alignment::Center), middle);
 }
 
 fn indicator(state: State, tick: usize) -> Span<'static> {

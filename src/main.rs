@@ -5,6 +5,7 @@
 //! changement (voir SPEC.md).
 
 mod git;
+mod mirror;
 mod model;
 mod pins;
 mod proc;
@@ -22,7 +23,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use notify::RecommendedWatcher;
 use ratatui::widgets::ListState;
 
-use model::{Key, Model, ROOT_ID, Row, RowKind};
+use mirror::Mirror;
+use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
 use record::Parsed;
 use watch::Event;
 
@@ -48,6 +50,8 @@ struct App {
     git: Sender<Vec<PathBuf>>,
     /// Épingles non publiées dont `model.headers` a été lu : relu quand cet ensemble change.
     headers_for: Vec<String>,
+    /// Copie de la session sélectionnée, ouverte par `d` (SPEC.md § Copie de session).
+    mirror: Option<Mirror>,
 }
 
 fn main() {
@@ -81,6 +85,7 @@ fn main() {
         git_dirs: HashSet::new(),
         git: git::spawn_refresher(tx.clone()),
         headers_for: Vec::new(),
+        mirror: None,
     };
 
     let mut terminal = ratatui::init();
@@ -102,7 +107,7 @@ impl App {
     fn run(&mut self, terminal: &mut ratatui::DefaultTerminal, rx: &Receiver<Event>) -> std::io::Result<()> {
         loop {
             terminal.draw(|f| {
-                ui::draw(f, &self.model, &self.rows, self.own_zellij.as_deref(), &mut self.list);
+                ui::draw(f, &self.model, &self.rows, self.own_zellij.as_deref(), &mut self.list, self.mirror.as_ref());
             })?;
 
             let first = match self.wake_after() {
@@ -124,6 +129,11 @@ impl App {
                     Event::Pins => pins = true,
                     Event::Git(cwd, repo) => self.apply_git(cwd, repo),
                     Event::ProcExit(pid) => self.proc_exit(pid),
+                    Event::Pane(generation, update) => {
+                        if let Some(mirror) = &mut self.mirror {
+                            mirror.apply(generation, update);
+                        }
+                    }
                     Event::Resize => {}
                     Event::Key(key) => {
                         if !self.key(key) {
@@ -149,6 +159,7 @@ impl App {
                 self.model.message = None;
             }
             self.rebuild();
+            self.sync_mirror();
         }
     }
 
@@ -159,6 +170,16 @@ impl App {
         match (spinner, message) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
+        }
+    }
+
+    /// Fait suivre à la copie ouverte la ligne sélectionnée.
+    fn sync_mirror(&mut self) {
+        let Some(mirror) = &mut self.mirror else { return };
+        let row = self.model.selected.as_ref().and_then(|k| self.rows.iter().find(|r| &r.key == k));
+        match model::copy_source(&self.model, row) {
+            CopySource::Pane(z) => mirror.follow(&z.session, &z.pane_id),
+            CopySource::Message(message) => mirror.show(message),
         }
     }
 
@@ -271,6 +292,13 @@ impl App {
         let index = self.model.selected.as_ref().and_then(|k| self.rows.iter().position(|r| &r.key == k));
         match key.code {
             KeyCode::Char('q') => return false,
+            KeyCode::Char('d') => {
+                self.mirror = match self.mirror.take() {
+                    Some(_) => None,
+                    None => Some(Mirror::new(self.tx.clone())),
+                };
+            }
+            KeyCode::Esc => self.mirror = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(i) = index.filter(|&i| i > 0) {

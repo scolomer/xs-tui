@@ -23,6 +23,8 @@ pub enum Event {
     /// Résultat du thread de statut pour un `cwd` (`None` hors dépôt).
     Git(PathBuf, Option<crate::git::Repo>),
     ProcExit(i32),
+    /// Mise à jour de l'abonnement de copie numéro `.0`.
+    Pane(u64, crate::mirror::Update),
     Key(KeyEvent),
     Resize,
 }

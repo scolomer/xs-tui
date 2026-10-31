@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::git::Repo;
 use crate::pins::Pinned;
-use crate::record::{Kind, Record, State};
+use crate::record::{Kind, Record, State, Zellij};
 
 /// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide ; une session
 /// dormante a le pid `DORMANT_PID` et son id de session.
@@ -242,6 +242,40 @@ pub fn any_working(m: &Model, rows: &[Row]) -> bool {
     rows.iter().any(|r| m.instances.get(&r.key).is_some_and(|rec| rec.state == State::Working))
 }
 
+/// Ce que montre la copie pour la ligne sélectionnée (SPEC.md § Copie de session).
+#[derive(Debug, PartialEq, Eq)]
+pub enum CopySource<'a> {
+    Pane(&'a Zellij),
+    Message(&'static str),
+}
+
+/// Source de la copie : un sous-agent montre le pane de sa racine.
+pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
+    let Some(row) = row else { return CopySource::Message("Aucune session sélectionnée") };
+    match row.kind {
+        RowKind::Dormant => CopySource::Message("Session dormante"),
+        RowKind::Error => CopySource::Message("Ligne d'erreur"),
+        RowKind::Root | RowKind::Sub { .. } => {
+            match m.instances.get(&(row.key.0, ROOT_ID.to_string())).and_then(|r| r.zellij.as_ref()) {
+                Some(z) => CopySource::Pane(z),
+                None => CopySource::Message("Instance hors zellij"),
+            }
+        }
+    }
+}
+
+/// Titre de la session de la ligne sélectionnée, pour la ligne de séparation de la copie.
+pub fn copy_title<'a>(m: &'a Model, row: Option<&Row>) -> Option<&'a str> {
+    let row = row?;
+    match row.kind {
+        RowKind::Dormant => m.dormant(&row.key).map(|p| p.title.as_str()),
+        RowKind::Error => None,
+        RowKind::Root | RowKind::Sub { .. } => {
+            m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.title.as_str())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +400,19 @@ mod tests {
         let after = rows(&m);
         select_after_rebuild(&mut m, &before, &after);
         assert_eq!(m.selected, Some((DORMANT_PID, "x".into())));
+    }
+
+    #[test]
+    fn subagent_copies_its_root_pane() {
+        let mut root = rec(1, "Main", None, "a");
+        root.zellij = Some(Zellij { session: "m1".into(), pane_id: "8".into() });
+        let mut m = model(vec![root, rec(1, "A", Some("Main"), "b"), rec(2, "Main", None, "c")]);
+        m.headers = headers(&["x"]);
+        let rows = rows(&m);
+        let source = |key: (i32, &str)| copy_source(&m, rows.iter().find(|r| (r.key.0, r.key.1.as_str()) == key));
+        let pane = Zellij { session: "m1".into(), pane_id: "8".into() };
+        assert_eq!(source((1, "A")), CopySource::Pane(&pane));
+        assert_eq!(source((2, "Main")), CopySource::Message("Instance hors zellij"));
+        assert_eq!(source((DORMANT_PID, "x")), CopySource::Message("Session dormante"));
     }
 }
