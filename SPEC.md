@@ -1,6 +1,6 @@
-# agent-tui — spécification v1
+# agz — spécification v1
 
-agent-tui est une application TUI de pilotage de harness LLM, développée en Rust avec Ratatui.
+agz est une application TUI de pilotage de harness LLM, développée en Rust avec Ratatui.
 La v1 affiche en temps réel les instances oh-my-pi (omp) en cours, avec leurs sous-agents, et
 permet d'aller au pane zellij d'une instance.
 
@@ -11,7 +11,7 @@ permet d'aller au pane zellij d'une instance.
 - Mise à jour dynamique : apparition, disparition et changement d'état des instances sans action de l'utilisateur.
 - Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
-  agent-tui.
+  agz.
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de prompts ou de commandes à omp, affichage du détail de l'état (outil en
@@ -23,10 +23,10 @@ modes `json`/`rpc`).
 ```mermaid
 flowchart LR
   subgraph omp["process omp (bun), mode tui"]
-    M[extension · main] -->|écriture atomique| F1["~/.omp/run/agent-tui/&lt;pid&gt;/Main.json"]
+    M[extension · main] -->|écriture atomique| F1["~/.omp/run/agentz/&lt;pid&gt;/Main.json"]
     S[extension · sous-agents] -->|écriture atomique| F2["&lt;pid&gt;/&lt;agentId&gt;.json"]
   end
-  F1 & F2 -->|notify : FSEvents / inotify| T[agent-tui]
+  F1 & F2 -->|notify : FSEvents / inotify| T[agz]
   K[kqueue NOTE_EXIT / pidfd] -->|mort du pid| T
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
@@ -34,13 +34,13 @@ flowchart LR
 
 omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, OSC 7501) : aucun
 fichier ni socket ne le rend lisible par un autre process. Une extension omp publie donc l'état de
-chaque agent dans un fichier JSON, et agent-tui surveille ces fichiers.
+chaque agent dans un fichier JSON, et agz surveille ces fichiers.
 
 Le dépôt contient les deux composants :
 
-- racine : le binaire Rust `agent-tui` ;
-- `extension/` : l'extension omp (paquet bun/TypeScript), installée par lien symbolique
-  `~/.omp/agent/extensions/agent-tui -> <dépôt>/extension`, comme omp-cron et omp-q.
+- racine : le binaire Rust `agz` ;
+- `extension/` : l'extension omp agentz (paquet bun/TypeScript), installée par lien symbolique
+  `~/.omp/agent/extensions/agentz -> <dépôt>/extension`, comme omp-cron et omp-q.
 
 Le format du fichier évolue dans le même commit côté producteur et côté consommateur.
 
@@ -57,7 +57,7 @@ Dans tout autre mode (`print`, `json`, `rpc`), elle ne publie rien.
 
 ### Fichiers
 
-Un fichier par agent : `~/.omp/run/agent-tui/<pid>/<agentId>.json`.
+Un fichier par agent : `~/.omp/run/agentz/<pid>/<agentId>.json`.
 
 Chaque liaison de l'extension (main ou sous-agent) n'écrit que son propre fichier : aucun état
 partagé entre sessions, aucune écriture concurrente sur un même fichier.
@@ -97,7 +97,7 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
 | `startedAt` | Démarrage de l'agent ; sert à l'ordre d'affichage. |
 | `updatedAt` | Dernière écriture du fichier. |
 
-La branche git n'est pas publiée : agent-tui la lit lui-même.
+La branche git n'est pas publiée : agz la lit lui-même.
 
 ### Calcul de l'état
 
@@ -131,31 +131,31 @@ Sur `session_switch` (reprise d'une autre session dans le même process), l'exte
   travail en cours.
 - Une session main supprime le dossier `<pid>/` entier à sa fermeture (`session_shutdown`) et à la
   sortie du process.
-- Après un crash ou un `kill -9`, le dossier reste ; agent-tui le supprime (voir « Vivacité »).
+- Après un crash ou un `kill -9`, le dossier reste ; agz le supprime (voir « Vivacité »).
 
-## agent-tui
+## agz
 
 ### Découverte
 
 Les fichiers de l'extension sont la seule source : une instance existe si et seulement si le
-dossier `~/.omp/run/agent-tui/<pid>/` contient son fichier et que le pid est vivant. Un omp qui ne
+dossier `~/.omp/run/agentz/<pid>/` contient son fichier et que le pid est vivant. Un omp qui ne
 charge pas l'extension, par exemple lancé avant son installation, n'apparaît pas.
 
-agent-tui surveille `~/.omp/run/agent-tui/` récursivement (crate `notify` : FSEvents sur macOS,
+agz surveille `~/.omp/run/agentz/` récursivement (crate `notify` : FSEvents sur macOS,
 inotify sur Linux), relit les fichiers modifiés et reconstruit l'arbre via `agent.parentId`.
-agent-tui peut démarrer avant ou après les instances omp.
+agz peut démarrer avant ou après les instances omp.
 
 ### Vivacité
 
-- À la découverte d'un pid, agent-tui vérifie que le process est bien un process bun, pour écarter
+- À la découverte d'un pid, agz vérifie que le process est bien un process bun, pour écarter
   un pid réutilisé (libproc sur macOS, `/proc/<pid>` sur Linux).
-- agent-tui s'abonne ensuite à la sortie du pid, sans sondage : kqueue `EVFILT_PROC`/`NOTE_EXIT`
+- agz s'abonne ensuite à la sortie du pid, sans sondage : kqueue `EVFILT_PROC`/`NOTE_EXIT`
   sur macOS, `pidfd_open` + epoll sur Linux.
-- À la mort d'un pid, agent-tui retire ses lignes et supprime le dossier `<pid>/`.
+- À la mort d'un pid, agz retire ses lignes et supprime le dossier `<pid>/`.
 
 ### Branche git
 
-agent-tui résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
+agz résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
 et index, y compris ceux d'un worktree, pour suivre les changements de branche et de statut. Le
 code de lecture de HEAD est recopié de `head_label` d'omp-sessions.
 
@@ -181,7 +181,7 @@ de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visib
 
 La source est le `/pin` d'omp, qui bascule l'épingle de la session courante (`/pin <id>` pour une
 autre session) et range les ids épinglés dans `~/.omp/agent/session-pins.json` (tableau JSON, ordre
-d'épinglage). agent-tui surveille ce fichier sans sondage et ne l'écrit jamais : épingler et
+d'épinglage). agz surveille ce fichier sans sondage et ne l'écrit jamais : épingler et
 désépingler se font uniquement depuis omp.
 
 - Session épinglée vivante : une instance dont le `sessionId` publié est épinglé. Elle reste une
@@ -192,7 +192,7 @@ désépingler se font uniquement depuis omp.
   compteurs git sont calculés depuis ce `cwd` comme pour une instance.
 - Une épingle dont le fichier de session n'existe plus est ignorée.
 
-Avant de reprendre une session dormante, agent-tui vérifie qu'elle n'est pas déjà ouverte : elle
+Avant de reprendre une session dormante, agz vérifie qu'elle n'est pas déjà ouverte : elle
 l'est si son bail de propriété `~/.omp/run/session-owners/<id>.lock` est verrouillé (`flock`
 exclusif non bloquant, relâché aussitôt ; omp le tient jusqu'à sa mort) ou si une instance publie
 son `sessionId`.
@@ -264,7 +264,7 @@ des instances.
 
 ### Instances hors de portée
 
-Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'agent-tui, ou hors
+Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'agz, ou hors
 zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
 
 ### Liste vide
@@ -289,7 +289,7 @@ Sans aucune instance ni session dormante : « Aucune instance omp » centré, ba
 | `q`, `Ctrl-C` | Quitter. |
 
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
-  (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'agent-tui tourne.
+  (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'agz tourne.
 - Le curseur suit l'élément sélectionné (clé `pid` + `agent.id` pour une instance, id de session
   pour une session dormante) quand la liste change. Si l'élément disparaît, le curseur passe à
   son parent, sinon à la ligne voisine.
@@ -298,19 +298,19 @@ Sans aucune instance ni session dormante : « Aucune instance omp » centré, ba
 - Entrée sur une session dormante, comme le script `zellij-resume.sh` d'omp-sessions :
   - déjà ouverte (voir « Sessions épinglées ») : « Session déjà ouverte par un autre omp », aucune
     autre action ;
-  - agent-tui hors zellij : « agent-tui hors zellij : reprise impossible » ;
-  - sinon : nouvel onglet dans la session zellij d'agent-tui, ouvert dans le `cwd` de la session
+  - agz hors zellij : « agz hors zellij : reprise impossible » ;
+  - sinon : nouvel onglet dans la session zellij d'agz, ouvert dans le `cwd` de la session
     (`$HOME` s'il n'existe plus) :
     `zellij action new-tab --cwd <cwd> -- fish -C "cd <cwd>; and omp --resume <id>"`. fish reste
     ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne redevient
     une instance.
-- agent-tui reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
+- agz reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
 
 ## Risques connus
 
 - L'extension recopie la logique d'état d'omp (`event-controller.ts`) faute de hook exposant
   directement son `RunStatus`. Un changement dans omp peut faire diverger l'état affiché sans erreur.
-- L'état (publié par l'extension) et la branche (lue par agent-tui) viennent de deux sources
+- L'état (publié par l'extension) et la branche (lue par agz) viennent de deux sources
   distinctes.
 - Un `/rename` fait au repos apparaît avec au plus 500 ms de retard.
 - Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et

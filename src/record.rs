@@ -1,4 +1,4 @@
-//! Fichier publié par l'extension omp pour un agent : `~/.omp/run/agent-tui/<pid>/<agentId>.json`.
+//! Fichier publié par l'extension agentz pour un agent : `~/.omp/run/agentz/<pid>/<agentId>.json`.
 //!
 //! Le format est décrit dans SPEC.md § Format ; il évolue dans le même commit que `extension/`.
 
@@ -25,7 +25,7 @@ pub enum Kind {
     Sub,
 }
 
-/// Champs lus par agent-tui ; les autres (`depth`, `updatedAt`…) sont ignorés.
+/// Champs lus par agz ; les autres (`depth`, `updatedAt`…) sont ignorés.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {

@@ -1,6 +1,6 @@
-//! agent-tui : tableau de bord des instances omp interactives et de leurs sous-agents.
+//! agz : tableau de bord des instances omp interactives et de leurs sous-agents.
 //!
-//! L'extension `extension/` publie l'état de chaque agent dans `~/.omp/run/agent-tui/<pid>/` ;
+//! L'extension agentz (`extension/`) publie l'état de chaque agent dans `~/.omp/run/agentz/<pid>/` ;
 //! ce binaire surveille ces fichiers, la vie des pids et les HEAD git, et redessine à chaque
 //! changement (voir SPEC.md).
 
@@ -52,18 +52,18 @@ struct App {
 
 fn main() {
     let Some(home) = std::env::var_os("HOME") else {
-        eprintln!("agent-tui: HOME non défini");
+        eprintln!("agz: HOME non défini");
         std::process::exit(1);
     };
     let home = PathBuf::from(home);
     let omp_dir = home.join(".omp");
     let agent_dir = omp_dir.join("agent");
-    let run_dir = omp_dir.join("run/agent-tui");
+    let run_dir = omp_dir.join("run/agentz");
     let (tx, rx) = mpsc::channel();
     let watcher = match watch::start(&run_dir, &agent_dir, tx.clone()) {
         Ok(w) => w,
         Err(err) => {
-            eprintln!("agent-tui: surveillance de {} impossible : {err}", run_dir.display());
+            eprintln!("agz: surveillance de {} impossible : {err}", run_dir.display());
             std::process::exit(1);
         }
     };
@@ -93,7 +93,7 @@ fn main() {
     let result = app.run(&mut terminal, &rx);
     ratatui::restore();
     if let Err(err) = result {
-        eprintln!("agent-tui: {err}");
+        eprintln!("agz: {err}");
         std::process::exit(1);
     }
 }

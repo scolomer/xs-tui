@@ -21,7 +21,7 @@ pub fn focus(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
 /// comme `zellij-resume.sh` d'omp-sessions : fish reste ouvert après la sortie d'omp.
 pub fn resume(own: Option<&str>, id: &str, cwd: &Path) -> Result<(), String> {
     if own.is_none() {
-        return Err("agent-tui hors zellij : reprise impossible".into());
+        return Err("agz hors zellij : reprise impossible".into());
     }
     let script = format!("cd {}; and omp --resume {id}", fish_quote(cwd));
     run(Command::new("zellij").args(["action", "new-tab", "--cwd"]).arg(cwd).args(["--", "fish", "-C", &script]))

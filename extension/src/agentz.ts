@@ -1,6 +1,6 @@
 /**
- * agent-tui publisher: writes each agent's run state to `~/.omp/run/agent-tui/<pid>/<agentId>.json`
- * so the agent-tui dashboard can show it (SPEC.md § Extension omp).
+ * agentz publisher: writes each agent's run state to `~/.omp/run/agentz/<pid>/<agentId>.json`
+ * so the agz dashboard can show it (SPEC.md § Extension omp).
  *
  * The module is imported once per process and the factory is rebound for every subagent: module
  * variables are shared between the main session and its subagents, closure variables are per agent.
@@ -12,7 +12,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { reduce, type Tracker } from "./state";
 
-const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agent-tui");
+const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agentz");
 const FORMAT_VERSION = 1;
 const TITLE_POLL_MS = 500;
 
@@ -21,8 +21,8 @@ let rootPublishes = false;
 
 const pidDir = path.join(RUN_DIR, String(process.pid));
 
-export default function agentTui(pi: ExtensionAPI) {
-	pi.setLabel("agent-tui");
+export default function agentz(pi: ExtensionAPI) {
+	pi.setLabel("agentz");
 
 	let enabled = false;
 	const tracker: Tracker = { state: "idle", blocking: new Set() };
@@ -69,7 +69,7 @@ export default function agentTui(pi: ExtensionAPI) {
 			lastTitle = rec.title;
 		} catch (error) {
 			// Never fail omp over the dashboard; leave a trace in the omp log instead.
-			pi.logger.warn("agent-tui: publish failed", { file: target, error: String(error) });
+			pi.logger.warn("agentz: publish failed", { file: target, error: String(error) });
 		}
 	}
 
@@ -78,7 +78,7 @@ export default function agentTui(pi: ExtensionAPI) {
 			if (ctx.agent.kind === "main") await fs.rm(pidDir, { recursive: true, force: true });
 			else if (file) await fs.rm(file, { force: true });
 		} catch (error) {
-			pi.logger.warn("agent-tui: cleanup failed", { dir: pidDir, error: String(error) });
+			pi.logger.warn("agentz: cleanup failed", { dir: pidDir, error: String(error) });
 		}
 		file = undefined;
 	}
@@ -90,7 +90,7 @@ export default function agentTui(pi: ExtensionAPI) {
 		} else {
 			enabled = rootPublishes;
 		}
-		pi.logger.debug("agent-tui: session_start", {
+		pi.logger.debug("agentz: session_start", {
 			agent: ctx.agent.id,
 			kind: ctx.agent.kind,
 			mode: ctx.mode,

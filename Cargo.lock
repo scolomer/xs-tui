@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "agent-tui"
+name = "agz"
 version = "0.1.0"
 dependencies = [
  "crossterm",

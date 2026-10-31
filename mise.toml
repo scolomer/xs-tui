@@ -3,7 +3,7 @@ rust = "latest"
 bun = "latest"
 
 [tasks.build]
-description = "Compile agent-tui (release) et vérifie l'extension"
+description = "Compile agz (release) et vérifie l'extension agentz"
 run = [
   "cargo build --release",
   "bun install --cwd extension",
@@ -11,9 +11,9 @@ run = [
 ]
 
 [tasks.start]
-description = "Compile puis lance agent-tui"
+description = "Compile puis lance agz"
 depends = ["build"]
-run = "./target/release/agent-tui"
+run = "./target/release/agz"
 
 [tasks.test]
 description = "Tests Rust et extension"

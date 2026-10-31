@@ -1,5 +1,5 @@
 //! Sessions épinglées par `/pin` d'omp : `~/.omp/agent/session-pins.json` et en-têtes des fichiers
-//! de session (SPEC.md § Sessions épinglées). agent-tui ne les écrit jamais.
+//! de session (SPEC.md § Sessions épinglées). agz ne les écrit jamais.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -101,7 +101,7 @@ mod tests {
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("agent-tui-pins-{}-{name}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("agz-pins-{}-{name}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
