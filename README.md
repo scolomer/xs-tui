@@ -66,6 +66,10 @@ This installs `agz` into `~/.cargo/bin` and links the extension as
 `mise run extension:install`. omp instances started before the link exist do not load the
 extension and do not appear until they restart.
 
+To check that omp loads the extension and that it publishes, run `mise run extension:check`. It
+starts a throwaway omp (`--no-session`) in a pseudo-terminal, waits for its record, then exits it
+and checks that the record is removed.
+
 ## Usage
 
 Run `agz` in a zellij pane. It renames its tab to `agentz`.

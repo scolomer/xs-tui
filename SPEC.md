@@ -46,7 +46,9 @@ Le dépôt contient les deux composants :
 
 `mise run install` installe `agz` dans `~/.cargo/bin` (`cargo install`) puis l'extension ;
 `mise run extension:install` installe seulement l'extension (`bun install` et création ou mise à
-jour de ce lien).
+jour de ce lien). `mise run extension:check` vérifie que ce lien vise bien `extension/` de ce
+dépôt, puis lance un omp jetable (`omp --no-session`, dans un pseudo-terminal et un dossier
+temporaire), attend son fichier publié et vérifie qu'il disparaît après `/exit`.
 
 Le format du fichier évolue dans le même commit côté producteur et côté consommateur.
 

@@ -28,6 +28,10 @@ run = [
   "ln -sfn {{config_root}}/extension ~/.omp/agent/extensions/agentz",
 ]
 
+[tasks."extension:check"]
+description = "Vérifie que omp charge l'extension agentz installée et qu'elle publie"
+run = "bun extension/scripts/check.ts"
+
 [tasks.test]
 description = "Tests Rust et extension"
 run = ["cargo test", "bun test --cwd extension"]
