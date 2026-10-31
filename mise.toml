@@ -15,6 +15,15 @@ description = "Compile puis lance agz"
 depends = ["build"]
 run = "./target/release/agz"
 
+[tasks.install]
+description = "Installe agz dans ~/.cargo/bin et lie l'extension agentz dans omp"
+run = [
+  "cargo install --path . --locked",
+  "bun install --cwd extension",
+  "mkdir -p ~/.omp/agent/extensions",
+  "ln -sfn {{config_root}}/extension ~/.omp/agent/extensions/agentz",
+]
+
 [tasks.test]
 description = "Tests Rust et extension"
 run = ["cargo test", "bun test --cwd extension"]

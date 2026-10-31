@@ -42,6 +42,9 @@ Le dépôt contient les deux composants :
 - `extension/` : l'extension omp agentz (paquet bun/TypeScript), installée par lien symbolique
   `~/.omp/agent/extensions/agentz -> <dépôt>/extension`, comme omp-cron et omp-q.
 
+`mise run install` installe `agz` dans `~/.cargo/bin` (`cargo install`) et crée ou met à jour ce
+lien.
+
 Le format du fichier évolue dans le même commit côté producteur et côté consommateur.
 
 ## Extension omp
