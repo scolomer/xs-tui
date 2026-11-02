@@ -24,11 +24,15 @@ pub fn focus(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
 
 /// Reprend la session `id` dans un nouvel onglet de la session zellij courante, ouvert dans `cwd`,
 /// comme `zellij-resume.sh` d'omp-sessions : fish reste ouvert après la sortie d'omp.
+///
+/// fish n'active pas le contrôle des tâches pour `-C` : sans `status job-control full`, omp
+/// resterait dans le groupe de processus de fish. Son Ctrl+Z (`SIGSTOP` au groupe) gèlerait alors
+/// fish avec lui, et fermer le pane laisserait omp arrêté pour toujours.
 pub fn resume(own: Option<&str>, id: &str, cwd: &Path) -> Result<(), String> {
     if own.is_none() {
         return Err("agz hors zellij : reprise impossible".into());
     }
-    let script = format!("cd {}; and omp --resume {id}", fish_quote(cwd));
+    let script = format!("status job-control full; cd {}; and omp --resume {id}", fish_quote(cwd));
     run(Command::new("zellij").args(["action", "new-tab", "--cwd"]).arg(cwd).args(["--", "fish", "-C", &script]))
 }
 

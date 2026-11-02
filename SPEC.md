@@ -336,9 +336,11 @@ curseur.
   - agz hors zellij : « agz hors zellij : reprise impossible » ;
   - sinon : nouvel onglet dans la session zellij d'agz, ouvert dans le `cwd` de la session
     (`$HOME` s'il n'existe plus) :
-    `zellij action new-tab --cwd <cwd> -- fish -C "cd <cwd>; and omp --resume <id>"`. fish reste
-    ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne redevient
-    une instance.
+    `zellij action new-tab --cwd <cwd> -- fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`.
+    fish reste ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne
+    redevient une instance. `status job-control full` donne à omp son propre groupe de processus :
+    sans lui (fish désactive le contrôle des tâches pour `-C`), le Ctrl+Z d'omp gèlerait aussi
+    fish, et fermer le pane laisserait omp arrêté sans jamais le réveiller.
 - agz reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
 - Au démarrage dans zellij, agz renomme son onglet en `agentz` (`zellij action
   rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
