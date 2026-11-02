@@ -40,6 +40,10 @@ pub struct Model {
     pub message: Option<(String, Instant)>,
     /// Frame du spinner.
     pub tick: usize,
+    /// Jauges de consommation, dans l'ordre d'affichage ; gardées après un échec de relecture.
+    pub usage: Vec<crate::usage::Account>,
+    /// Dernier échec de relecture de la consommation.
+    pub usage_error: Option<String>,
 }
 
 impl Model {

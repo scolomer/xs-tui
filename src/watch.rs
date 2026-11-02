@@ -25,6 +25,8 @@ pub enum Event {
     ProcExit(i32),
     /// Mise à jour de l'abonnement de copie numéro `.0`.
     Pane(u64, crate::mirror::Update),
+    /// Consommation lue par `omp usage`, ou message d'erreur.
+    Usage(Result<Vec<crate::usage::Account>, String>),
     Key(KeyEvent),
     Resize,
 }

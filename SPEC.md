@@ -13,6 +13,7 @@ permet d'aller au pane zellij d'une instance.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
   agz.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
+- Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de prompts ou de commandes à omp, affichage du détail de l'état (outil en
@@ -32,6 +33,7 @@ flowchart LR
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
   Z -.->|zellij action dump-screen, copie ouverte| T
+  U["omp usage --json"] -->|fin de tour, reset, 15 min| T
 ```
 
 omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, OSC 7501) : aucun
@@ -165,7 +167,9 @@ agz peut démarrer avant ou après les instances omp.
 
 agz résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
 et index, y compris ceux d'un worktree, pour suivre les changements de branche et de statut. Le
-code de lecture de HEAD est recopié de `head_label` d'omp-sessions.
+code de lecture de HEAD est recopié de `head_label` d'omp-sessions. Le statut (compteurs) est
+recalculé à chaque changement de HEAD ou d'index et toutes les 10 s, comme dans la barre d'état
+d'omp, pour voir les modifications de l'arbre de travail.
 
 - Hors dépôt git : aucun segment branche.
 - HEAD sur une branche : nom complet (`feat/spoon-feeder-cep-sc-131806`).
@@ -290,8 +294,8 @@ curseur.
   `zellij --session <session> action dump-screen --pane-id terminal_<paneId> --ansi` toutes les
   250 ms tant que la copie est ouverte. Un sous-agent montre le pane de sa racine. Une instance
   d'une autre session zellij est copiée aussi.
-- C'est le seul sondage d'agz : zellij ne redessine pas un onglet qui n'est pas affiché, et
-  `zellij subscribe` ne diffuse donc rien pour le pane d'un omp dans un autre onglet.
+- zellij ne redessine pas un onglet qui n'est pas affiché : `zellij subscribe` ne diffuse donc
+  rien pour le pane d'un omp dans un autre onglet, d'où la relecture à intervalle fixe.
 - Rendu : les couleurs d'omp sont conservées, sans atténuation. omp écrit de haut en bas sans
   forcément remplir l'écran : la copie montre ses dernières lignes non vides, coupées à droite si
   le pane est plus large que la zone. Pas d'historique.
@@ -304,10 +308,45 @@ curseur.
   de ligne ou à une réouverture.
 - La copie n'est pas mémorisée : agz démarre avec la liste seule.
 
+### Consommation
+
+À droite de la liste, une colonne de jauges reprend ce que montre `/usage` d'omp pour Anthropic
+puis OpenAI : un bloc par compte, son nom en gras puis une jauge par fenêtre.
+
+```
+Anthropic
+5 h        █░░░░░░░░░   7 %   2h54
+7 j        ██░░░░░░░░  21 %  1j14h
+7 j Fable  ░░░░░░░░░░   4 %  1j14h
+```
+
+- Source : `omp usage --json --no-extensions`, dont agz ne garde que les rapports `anthropic` et
+  `openai-codex`. omp met ces rapports en cache 5 min et les tient à jour avec les en-têtes de
+  réponse des modèles : agz n'a pas d'identifiants. Cette commande ne crée pas de session. Elle
+  est lancée avec `OMP_LOG_LEVEL=error` : sinon chaque appel laisserait un journal
+  `~/.omp/logs/omp.<jour>.<pid>.log`, que omp garde 5 jours. Quand le cache a expiré, omp
+  interroge le fournisseur ; s'il refuse (429), omp renvoie le dernier rapport connu.
+- Toutes les fenêtres sont affichées, compteurs secondaires compris (`7 j Fable`). Le nom du
+  compte est suivi de son email quand un fournisseur en a plusieurs.
+- Barre de 10 cellules, colorée selon le statut d'omp : verte (`ok`), jaune (`warning`), rouge
+  (`exhausted`), grise sinon. Puis le pourcentage consommé et le temps avant le reset (`45m`,
+  `3h02`, `1j14h`), redessiné à chaque minute.
+- Relecture au démarrage, quand une racine finit un tour (`working` → autre état ; au plus une
+  fois par minute), 5 s après le prochain reset d'une fenêtre, et toutes les 15 min pour capter la
+  consommation faite hors omp (claude.ai, autre machine). L'intervalle est plus long que le cache
+  d'omp pour ne pas solliciter l'API de consommation des fournisseurs, qui limite le débit (429).
+- La liste est prioritaire : la colonne disparaît si elle ne tient pas à droite de la ligne la
+  plus large (plus 3 colonnes d'écart), et la barre du bas l'indique (`jauges masquées`). Les
+  jauges qui dépassent la hauteur de la liste, par exemple quand la copie de session est ouverte,
+  sont omises : la dernière ligne de la colonne les compte en gris (`+3 jauges masquées`).
+- En cas d'échec d'`omp usage`, les dernières jauges restent affichées ; sans jauge, la colonne
+  montre le message en gris (« omp introuvable », « omp usage : <raison> »).
+
 ### Barre du bas
 
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
-  dormantes ne sont pas comptées.
+  dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
+  consommation n'a pas la place de s'afficher.
 - À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
@@ -355,6 +394,7 @@ curseur.
 - Un `/rename` fait au repos apparaît avec au plus 500 ms de retard.
 - La copie de session est relue toutes les 250 ms : un écran qui change entre deux lectures n'y
   apparaît pas, et le pane est coupé s'il est plus grand que la zone de copie.
+- Les jauges dépendent du format JSON d'`omp usage`, qui peut évoluer avec omp.
 - Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et
   restée sans écriture depuis apparaît dormante : omp ne prend son bail qu'à la première écriture.
   Entrée la rouvrirait alors une seconde fois.

@@ -28,6 +28,8 @@ longer running.
   omp exits (`○`); `Enter` resumes them in a new zellij tab.
 - **Session copy.** `d` splits the screen and shows a live, read-only copy of the selected
   session's screen under the list, exactly as omp draws it.
+- **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
+  windows, like omp's `/usage`: percentage used and time to reset, colored by omp's status.
 
 ## How it works
 
@@ -37,11 +39,13 @@ omp exposes its run state only on its own terminal, so the repository holds two 
   each agent's state to `~/.omp/run/agentz/<pid>/<agentId>.json` whenever it changes.
 - **The `agz` binary** (Rust, [ratatui](https://ratatui.rs)). It watches those files, the omp
   processes, the git repositories and `~/.omp/agent/session-pins.json`, and redraws on change.
-  It never writes to omp's files.
+  It never writes to omp's files. Usage comes from `omp usage --json`, which serves omp's own
+  cache, so agz needs no credentials of its own.
 
-Updates are event-driven (FSEvents or inotify, kqueue or pidfd). The only polling is the session
-copy, which reads the copied pane every 250 ms while it is open, because zellij does not render a
-pane whose tab is hidden.
+Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three timed refreshes: the
+git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
+because zellij does not render a pane whose tab is hidden; and usage every 15 min, on top of the
+refresh after each finished turn, to catch usage made outside omp.
 
 [`SPEC.md`](SPEC.md) is the full specification, in French.
 

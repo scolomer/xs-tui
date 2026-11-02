@@ -11,6 +11,7 @@ mod pins;
 mod proc;
 mod record;
 mod ui;
+mod usage;
 mod watch;
 mod zellij;
 
@@ -25,7 +26,7 @@ use ratatui::widgets::ListState;
 
 use mirror::Mirror;
 use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
-use record::Parsed;
+use record::{Kind, Parsed, State};
 use watch::Event;
 
 const SPINNER_FRAME: Duration = Duration::from_millis(100);
@@ -52,6 +53,8 @@ struct App {
     headers_for: Vec<String>,
     /// Copie de la session sélectionnée, ouverte par `d` (SPEC.md § Copie de session).
     mirror: Option<Mirror>,
+    /// Signale une fin de tour au thread de consommation (SPEC.md § Consommation).
+    usage: Sender<()>,
 }
 
 fn main() {
@@ -86,6 +89,7 @@ fn main() {
         git: git::spawn_refresher(tx.clone()),
         headers_for: Vec::new(),
         mirror: None,
+        usage: usage::spawn_refresher(tx.clone()),
     };
 
     let mut terminal = ratatui::init();
@@ -141,6 +145,11 @@ impl App {
                             mirror.apply(generation, update);
                         }
                     }
+                    Event::Usage(Ok(accounts)) => {
+                        self.model.usage = accounts;
+                        self.model.usage_error = None;
+                    }
+                    Event::Usage(Err(message)) => self.model.usage_error = Some(message),
                     Event::Resize => {}
                     Event::Key(key) => {
                         if !self.key(key) {
@@ -170,14 +179,13 @@ impl App {
         }
     }
 
-    /// Délai avant le prochain réveil sans événement : frame du spinner ou fin du message.
+    /// Délai avant le prochain réveil sans événement : frame du spinner, fin du message, ou minute
+    /// suivante pour les comptes à rebours des jauges.
     fn wake_after(&self) -> Option<Duration> {
         let spinner = model::any_working(&self.model, &self.rows).then_some(SPINNER_FRAME);
         let message = self.model.message.as_ref().map(|(_, at)| MESSAGE_TTL.saturating_sub(at.elapsed()));
-        match (spinner, message) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let minute = (!self.model.usage.is_empty()).then(|| Duration::from_millis(60_000 - usage::now_ms() % 60_000));
+        [spinner, message, minute].into_iter().flatten().min()
     }
 
     /// Fait suivre à la copie ouverte la ligne sélectionnée.
@@ -200,6 +208,7 @@ impl App {
     fn rescan(&mut self) {
         let mut seen: HashSet<Key> = HashSet::new();
         let mut errors = BTreeMap::new();
+        let mut turn_ended = false;
         for entry in std::fs::read_dir(&self.run_dir).into_iter().flatten().flatten() {
             let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else { continue };
             let dir = entry.path();
@@ -235,6 +244,9 @@ impl App {
                         rec.pid = pid;
                         let key = (pid, rec.agent.id.clone());
                         seen.insert(key.clone());
+                        // Une racine qui cesse de travailler a fini un tour : la consommation a changé.
+                        let was_working = self.model.instances.get(&key).is_some_and(|r| r.state == State::Working);
+                        turn_ended |= was_working && rec.agent.kind == Kind::Main && rec.state != State::Working;
                         self.model.instances.insert(key, rec);
                     }
                 }
@@ -243,6 +255,9 @@ impl App {
         self.model.instances.retain(|key, _| seen.contains(key));
         self.model.errors = errors;
         self.model.retain_repos();
+        if turn_ended {
+            let _ = self.usage.send(());
+        }
     }
 
     /// Relit `session-pins.json`.

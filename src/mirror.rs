@@ -2,7 +2,7 @@
 //! avec `zellij action dump-screen --ansi` toutes les `POLL`, et l'envoie converti en texte
 //! ratatui quand il a changé.
 //!
-//! C'est le seul sondage d'agz : `zellij subscribe` ne diffuse rien pour un pane dont l'onglet n'est
+//! Relecture à intervalle fixe : `zellij subscribe` ne diffuse rien pour un pane dont l'onglet n'est
 //! pas affiché, puisque zellij ne le redessine pas.
 
 use std::process::{Command, Stdio};

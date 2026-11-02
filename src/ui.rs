@@ -1,4 +1,5 @@
-//! Rendu : arbre des instances, copie de session et barre du bas (SPEC.md § Affichage).
+//! Rendu : arbre des instances, jauges de consommation, copie de session et barre du bas
+//! (SPEC.md § Affichage).
 
 use std::path::Path;
 
@@ -11,10 +12,16 @@ use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
 use crate::record::State;
+use crate::usage::{self, Status};
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  d détail  q quitter";
+const EMPTY: &str = "Aucune instance omp";
+/// Cellules d'une barre de jauge.
+const GAUGE_CELLS: usize = 10;
+/// Colonnes entre la ligne la plus large de la liste et les jauges.
+const GAUGE_GAP: u16 = 3;
 
 pub fn draw(
     frame: &mut Frame,
@@ -47,25 +54,28 @@ pub fn draw(
         }
     };
 
+    // Les titres des racines et des sessions dormantes commencent tous à la même colonne,
+    // après le plus large dossier/branche.
+    let title_col = rows
+        .iter()
+        .filter_map(|r| match r.kind {
+            RowKind::Root => m.instances.get(&r.key).map(|rec| rec.cwd.as_path()),
+            RowKind::Dormant => m.dormant(&r.key).map(|p| p.cwd.as_path()),
+            _ => None,
+        })
+        .map(|cwd| width(&location(m, cwd)))
+        .max()
+        .unwrap_or(0);
+    let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, own_zellij, title_col)).collect();
+    // `› ` devant chaque ligne.
+    let list_width = lines.iter().map(|l| l.width() + 2).max().unwrap_or(EMPTY.chars().count());
+    let (list_area, usage_hidden) = draw_usage(frame, m, list_area, list_width);
+
     if rows.is_empty() {
-        centered(frame, "Aucune instance omp", list_area);
+        centered(frame, EMPTY, list_area);
     } else {
-        // Les titres des racines et des sessions dormantes commencent tous à la même colonne,
-        // après le plus large dossier/branche.
-        let title_col = rows
-            .iter()
-            .filter_map(|r| match r.kind {
-                RowKind::Root => m.instances.get(&r.key).map(|rec| rec.cwd.as_path()),
-                RowKind::Dormant => m.dormant(&r.key).map(|p| p.cwd.as_path()),
-                _ => None,
-            })
-            .map(|cwd| width(&location(m, cwd)))
-            .max()
-            .unwrap_or(0);
-        let items: Vec<ListItem> =
-            rows.iter().map(|row| ListItem::new(row_line(m, row, own_zellij, title_col))).collect();
         list.select(m.selected.as_ref().and_then(|key| rows.iter().position(|r| &r.key == key)));
-        let widget = List::new(items)
+        let widget = List::new(lines.into_iter().map(ListItem::new))
             .highlight_symbol("› ")
             .highlight_spacing(HighlightSpacing::Always)
             .highlight_style(Style::new().add_modifier(Modifier::BOLD));
@@ -74,7 +84,85 @@ pub fn draw(
     if let Some((mirror, separator_area, copy_area)) = copy {
         draw_copy(frame, m, rows, mirror, separator_area, copy_area);
     }
-    draw_bar(frame, m, rows, bar_area);
+    draw_bar(frame, m, rows, bar_area, usage_hidden);
+}
+
+/// Jauges de consommation dans une colonne à droite de `area`, si la liste (`list_width`) garde sa
+/// largeur ; les jauges qui dépassent en hauteur sont remplacées par `+N jauges masquées`. Renvoie
+/// la zone laissée à la liste, et vrai si la colonne entière est masquée faute de largeur.
+fn draw_usage(frame: &mut Frame, m: &Model, area: Rect, list_width: usize) -> (Rect, bool) {
+    let mut lines = usage_lines(m, usage::now_ms());
+    let total = lines.iter().filter(|(_, gauge)| *gauge).count();
+    if lines.len() > usize::from(area.height) {
+        // La dernière ligne disponible signale les jauges omises.
+        lines.truncate(usize::from(area.height.saturating_sub(1)));
+        // Pas d'en-tête de compte ni de ligne vide sans jauge en dessous.
+        while lines.last().is_some_and(|(_, gauge)| !gauge) {
+            lines.pop();
+        }
+        let hidden = total - lines.iter().filter(|(_, gauge)| *gauge).count();
+        let s = if hidden > 1 { "s" } else { "" };
+        lines.push((Line::raw(format!("+{hidden} jauge{s} masquée{s}")).dim().right_aligned(), false));
+    }
+    let panel_width = lines.iter().map(|(l, _)| l.width()).max().unwrap_or(0) as u16;
+    if panel_width == 0 || area.height == 0 {
+        return (area, false);
+    }
+    if usize::from(area.width) < list_width + usize::from(GAUGE_GAP + panel_width) {
+        return (area, true);
+    }
+    let [list_area, _, panel_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(GAUGE_GAP), Constraint::Length(panel_width)])
+            .areas(area);
+    frame.render_widget(Paragraph::new(lines.into_iter().map(|(l, _)| l).collect::<Vec<_>>()), panel_area);
+    (list_area, false)
+}
+
+/// Lignes du panneau, chacune marquée vraie si c'est une jauge : par compte, son nom puis une jauge
+/// par fenêtre, `7 j  ██░░░░░░░░  22 %  1j14h`. Sans aucune jauge, le dernier échec de relecture.
+fn usage_lines(m: &Model, now_ms: u64) -> Vec<(Line<'_>, bool)> {
+    if m.usage.is_empty() {
+        let error = |e: &String| Line::raw(e.chars().take(40).collect::<String>()).dim();
+        return m.usage_error.iter().map(|e| (error(e), true)).collect();
+    }
+    let label_width = m.usage.iter().flat_map(|a| &a.gauges).map(|g| g.label.chars().count()).max().unwrap_or(0);
+    let mut out = Vec::new();
+    for account in &m.usage {
+        if !out.is_empty() {
+            out.push((Line::default(), false));
+        }
+        out.push((Line::raw(account.name.as_str()).bold(), false));
+        for g in &account.gauges {
+            let filled = ((g.used * GAUGE_CELLS as f64).round() as usize).min(GAUGE_CELLS);
+            let color = match g.status {
+                Status::Ok => Color::Green,
+                Status::Warning => Color::Yellow,
+                Status::Exhausted => Color::Red,
+                Status::Unknown => Color::DarkGray,
+            };
+            let reset = g.resets_at.filter(|&at| at > now_ms).map_or_else(String::new, |at| countdown(at - now_ms));
+            let line = Line::from(vec![
+                Span::raw(format!("{:<label_width$}  ", g.label)),
+                Span::styled("█".repeat(filled), color),
+                Span::styled("░".repeat(GAUGE_CELLS - filled), Color::DarkGray),
+                Span::raw(format!(" {:>3} %", (g.used * 100.0).round() as u32)),
+                Span::styled(format!("  {reset:>5}"), Color::DarkGray),
+            ]);
+            out.push((line, true));
+        }
+    }
+    out
+}
+
+/// Délai avant un reset : `45m`, `3h02`, `1j14h`.
+fn countdown(ms: u64) -> String {
+    let minutes = ms.div_ceil(60_000);
+    let (days, hours, mins) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (days, hours) {
+        (0, 0) => format!("{mins}m"),
+        (0, _) => format!("{hours}h{mins:02}"),
+        _ => format!("{days}j{hours}h"),
+    }
 }
 
 /// Ligne de séparation puis écran visible du pane copié, coupé en haut et à droite.
@@ -243,7 +331,8 @@ fn folder_name(cwd: &Path) -> String {
     cwd.file_name().unwrap_or(cwd.as_os_str()).to_string_lossy().into_owned()
 }
 
-fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect) {
+/// Barre du bas ; `usage_hidden` signale que les jauges n'ont pas la place de s'afficher.
+fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect, usage_hidden: bool) {
     if let Some((message, _)) = &m.message {
         frame.render_widget(Paragraph::new(message.as_str()).fg(Color::Yellow), area);
         return;
@@ -265,6 +354,12 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect) {
         }
         let glyph = indicator(state, m.tick);
         spans.push(Span::styled(format!("{n} {}", glyph.content), glyph.style));
+    }
+    if usage_hidden {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::raw("jauges masquées").dim());
     }
     let left = Line::from(spans);
     let help_width = Line::raw(HELP).width() as u16;
