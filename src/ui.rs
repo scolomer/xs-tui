@@ -16,7 +16,7 @@ use crate::usage::{self, Status};
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  d détail  q quitter";
+const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  x fermer  d détail  q quitter";
 const EMPTY: &str = "Aucune instance omp";
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;

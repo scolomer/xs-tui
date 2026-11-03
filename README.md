@@ -84,6 +84,7 @@ Run `agz` in a zellij pane. It renames its tab to `agentz`.
 | `Enter` | Go to the instance's pane (a subagent goes to its root's pane); resume a pinned session |
 | `Space` | Fold or unfold a root's subagents |
 | `p` | Pin or unpin the row's session (unpinning a dormant session removes its row) |
+| `x` | Close the instance and its pane; press `x` again within 3 s to confirm |
 | `d` | Open or close the session copy |
 | `Esc` | Close the session copy |
 | `q` / `Ctrl-C` | Quit |

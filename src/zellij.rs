@@ -22,6 +22,18 @@ pub fn focus(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
     run(Command::new("zellij").args(["action", "focus-pane-id", &format!("terminal_{}", target.pane_id)]))
 }
 
+/// Vérifie que `close` peut atteindre `target` depuis la session zellij `own`.
+pub fn check_close(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
+    check(own, target).map(|_| ())
+}
+
+/// Ferme le pane `target`. zellij envoie `SIGHUP` à omp, qui fait sa fermeture normale : session
+/// sauvegardée, dossier publié supprimé par l'extension.
+pub fn close(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
+    let target = check(own, target)?;
+    run(Command::new("zellij").args(["action", "close-pane", "--pane-id", &format!("terminal_{}", target.pane_id)]))
+}
+
 /// Reprend la session `id` dans un nouvel onglet de la session zellij courante, ouvert dans `cwd`,
 /// comme `zellij-resume.sh` d'omp-sessions : fish reste ouvert après la sortie d'omp.
 ///

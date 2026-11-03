@@ -365,7 +365,7 @@ Anthropic
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
   dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
   consommation n'a pas la place de s'afficher.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  d détail  q quitter`.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
 
@@ -377,6 +377,7 @@ Anthropic
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une session dormante, la reprend (voir ci-dessous). |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
+| `x` | Fermer l'instance et son pane, après confirmation (voir ci-dessous). Sur un sous-agent, ferme sa racine. |
 | `d` | Ouvrir ou fermer la copie de session (voir « Copie de session »). |
 | `Échap` | Fermer la copie de session. |
 | `q`, `Ctrl-C` | Quitter. |
@@ -400,6 +401,12 @@ Anthropic
     sans lui (fish désactive le contrôle des tâches pour `-C`), le Ctrl+Z d'omp gèlerait aussi
     fish, et fermer le pane laisserait omp arrêté sans jamais le réveiller.
 - agz reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
+- `x` sur une instance de la session zellij d'agz affiche « Fermer “<titre>” ? x pour confirmer »
+  (« cette session » sans titre). Un second `x` dans les 3 s ferme le pane avec `zellij action
+  close-pane --pane-id terminal_<paneId>` ; toute autre touche, ou 3 s d'attente, annule. zellij
+  envoie alors `SIGHUP` à omp, qui fait sa fermeture normale (session sauvegardée, dossier publié
+  supprimé), et la ligne disparaît. Une instance hors de portée affiche le même message qu'Entrée ;
+  `x` est sans effet sur une session dormante ou une ligne d'erreur.
 - Au démarrage dans zellij, agz renomme son onglet en `agentz` (`zellij action
   rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
   en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.

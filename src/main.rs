@@ -55,6 +55,8 @@ struct App {
     mirror: Option<Mirror>,
     /// Signale une fin de tour au thread de consommation (SPEC.md § Consommation).
     usage: Sender<()>,
+    /// Racine dont la fermeture attend un second `x`, et heure du premier.
+    close_pending: Option<(Key, Instant)>,
 }
 
 fn main() {
@@ -90,6 +92,7 @@ fn main() {
         headers_for: Vec::new(),
         mirror: None,
         usage: usage::spawn_refresher(tx.clone()),
+        close_pending: None,
     };
 
     let mut terminal = ratatui::init();
@@ -312,6 +315,11 @@ impl App {
     /// Traite une touche ; `false` pour quitter.
     fn key(&mut self, key: KeyEvent) -> bool {
         let index = self.model.selected.as_ref().and_then(|k| self.rows.iter().position(|r| &r.key == k));
+        // Une confirmation de fermeture ne vaut que pour la touche suivante, dans les 3 s.
+        let pending = self.close_pending.take().filter(|(_, at)| at.elapsed() < MESSAGE_TTL);
+        if pending.is_some() && key.code != KeyCode::Char('x') {
+            self.model.message = None;
+        }
         match key.code {
             KeyCode::Char('q') => return false,
             KeyCode::Char('d') => {
@@ -319,6 +327,28 @@ impl App {
                     Some(_) => None,
                     None => Some(Mirror::new(self.tx.clone())),
                 };
+            }
+            KeyCode::Char('x') => {
+                let Some(row) = index.map(|i| &self.rows[i]) else { return true };
+                if !matches!(row.kind, RowKind::Root | RowKind::Sub { .. }) {
+                    return true;
+                }
+                // Un sous-agent partage le pane de sa racine.
+                let root_key = (row.key.0, ROOT_ID.to_string());
+                let Some(root) = self.model.instances.get(&root_key) else { return true };
+                let own = self.own_zellij.as_deref();
+                if pending.is_some_and(|(key, _)| key == root_key) {
+                    self.model.message = None;
+                    if let Err(message) = zellij::close(own, root.zellij.as_ref()) {
+                        self.notify(message);
+                    }
+                } else if let Err(message) = zellij::check_close(own, root.zellij.as_ref()) {
+                    self.notify(message);
+                } else {
+                    let title = if root.title.is_empty() { "cette session" } else { root.title.as_str() };
+                    self.notify(format!("Fermer “{title}” ? x pour confirmer"));
+                    self.close_pending = Some((root_key, Instant::now()));
+                }
             }
             KeyCode::Esc => self.mirror = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
