@@ -14,7 +14,8 @@ import { reduce, type Tracker } from "./state";
 
 const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agentz");
 const FORMAT_VERSION = 1;
-const TITLE_POLL_MS = 500;
+/** Polling period for what omp changes without an extension event: title and `/move` cwd. */
+const POLL_MS = 500;
 
 /** Whether this process's main session publishes; subagents follow it (SPEC § Activation). */
 let rootPublishes = false;
@@ -28,8 +29,9 @@ export default function agentz(pi: ExtensionAPI) {
 	const tracker: Tracker = { state: "idle", blocking: new Set() };
 	let startedAt = "";
 	let lastTitle = "";
+	let lastCwd = "";
 	let file: string | undefined;
-	let titleTimer: Timer | undefined;
+	let pollTimer: Timer | undefined;
 	let exitHookInstalled = false;
 
 	function record(ctx: ExtensionContext) {
@@ -46,7 +48,8 @@ export default function agentz(pi: ExtensionAPI) {
 				parentId: ctx.agent.parentId ?? null,
 			},
 			sessionId: ctx.sessionManager.getSessionId(),
-			cwd: ctx.cwd,
+			// Not `ctx.cwd`: a snapshot from when `ctx` was built, stale after `/move` for the timer.
+			cwd: ctx.sessionManager.getCwd(),
 			title: ctx.sessionManager.getSessionName() ?? "",
 			state: tracker.state,
 			zellij: session && paneId ? { session, paneId } : null,
@@ -67,6 +70,7 @@ export default function agentz(pi: ExtensionAPI) {
 			await fs.rename(tmp, target);
 			file = target;
 			lastTitle = rec.title;
+			lastCwd = rec.cwd;
 		} catch (error) {
 			// Never fail omp over the dashboard; leave a trace in the omp log instead.
 			pi.logger.warn("agentz: publish failed", { file: target, error: String(error) });
@@ -101,10 +105,13 @@ export default function agentz(pi: ExtensionAPI) {
 		reduce(tracker, { type: "session_start" });
 		await publish(ctx);
 		if (ctx.agent.kind !== "main") return;
-		if (titleTimer) ctx.clearTimer(titleTimer);
-		titleTimer = ctx.setInterval(() => {
-			if ((ctx.sessionManager.getSessionName() ?? "") !== lastTitle) void publish(ctx);
-		}, TITLE_POLL_MS);
+		if (pollTimer) ctx.clearTimer(pollTimer);
+		// The title changes at rest after the first turn or a `/rename`; `/move` and `/wt` relocate
+		// the session without any event.
+		pollTimer = ctx.setInterval(() => {
+			const title = ctx.sessionManager.getSessionName() ?? "";
+			if (title !== lastTitle || ctx.sessionManager.getCwd() !== lastCwd) void publish(ctx);
+		}, POLL_MS);
 		if (!exitHookInstalled) {
 			exitHookInstalled = true;
 			process.once("exit", () => rmSync(pidDir, { recursive: true, force: true }));
@@ -158,8 +165,8 @@ export default function agentz(pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (!enabled) return;
 		enabled = false;
-		if (titleTimer) ctx.clearTimer(titleTimer);
-		titleTimer = undefined;
+		if (pollTimer) ctx.clearTimer(pollTimer);
+		pollTimer = undefined;
 		await remove(ctx);
 	});
 }

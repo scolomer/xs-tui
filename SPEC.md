@@ -100,7 +100,7 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
 | `pid` | pid du process omp. |
 | `agent` | Identité fournie par omp : `kind` (`main` ou `sub`), `id` (ex. `Main`, `OmpInstanceDiscovery`), `name` (type d'agent, ex. `main`, `task`, `scout`), `depth`, `parentId` (`null` pour une racine). |
 | `sessionId` | Identifiant de la session omp. |
-| `cwd` | Dossier de travail de la session. |
+| `cwd` | Dossier de travail de la session (`sessionManager.getCwd()`), à jour après `/move` et `/wt`. |
 | `title` | Titre de la session (`getSessionName()`), tel quel, icône nerd font comprise ; chaîne vide si la session n'a pas encore de titre. |
 | `state` | `idle`, `working`, `blocked` ou `error`. |
 | `zellij` | `{session, paneId}` lus dans `ZELLIJ_SESSION_NAME` et `ZELLIJ_PANE_ID` ; `null` hors zellij. |
@@ -126,11 +126,14 @@ L'extension reconstruit l'état d'exécution d'omp à partir des hooks d'extensi
 
 L'état `error` est remplacé au tour suivant (`agent_start`).
 
-### Titre
+### Titre et dossier
 
-`title` est relu à chaque publication d'état et, pour une session main, par un timer de 500 ms qui
-republie le fichier si `getSessionName()` a changé. Ce timer capte le titre généré
-automatiquement après le premier tour et les `/rename` faits au repos.
+`title` et `cwd` sont relus à chaque publication d'état et, pour une session main, par un timer de
+500 ms qui republie le fichier si `getSessionName()` ou `sessionManager.getCwd()` a changé. Ce timer
+capte le titre généré automatiquement après le premier tour, les `/rename` faits au repos, et les
+`/move` et `/wt`, qui déplacent la session sans émettre d'événement d'extension. Le dossier est lu
+dans `sessionManager` et non dans `ctx.cwd`, copie figée à la création du contexte : celui du timer
+date de `session_start`.
 
 Sur `session_switch` (reprise d'une autre session dans le même process), l'extension met à jour
 `sessionId`, `cwd` et `title`.
@@ -396,7 +399,7 @@ Anthropic
   directement son `RunStatus`. Un changement dans omp peut faire diverger l'état affiché sans erreur.
 - L'état (publié par l'extension) et la branche (lue par agz) viennent de deux sources
   distinctes.
-- Un `/rename` fait au repos apparaît avec au plus 500 ms de retard.
+- Un `/rename`, un `/move` ou un `/wt` fait au repos apparaît avec au plus 500 ms de retard.
 - La copie de session est relue toutes les 250 ms : un écran qui change entre deux lectures n'y
   apparaît pas, et le pane est coupé s'il est plus grand que la zone de copie.
 - Les jauges dépendent du format JSON d'`omp usage`, qui peut évoluer avec omp.
