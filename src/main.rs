@@ -340,6 +340,14 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('p') => {
+                let Some(id) = index.and_then(|i| model::session_of(&self.model, &self.rows[i])) else { return true };
+                match pins::toggle(&self.agent_dir, &id) {
+                    // Sans attendre l'événement du watcher, qui relira le même fichier.
+                    Ok(_) => self.load_pins(),
+                    Err(message) => self.notify(message),
+                }
+            }
             KeyCode::Enter => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 let result = if let Some(p) = self.model.dormant(&row.key) {

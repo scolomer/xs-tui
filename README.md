@@ -24,8 +24,8 @@ longer running.
 - **Folder and git branch.** Each row shows the session's folder and branch, colored and counted
   like omp's own status line (`*` unstaged, `+` staged, `?` untracked).
 - **Jump to a session.** `Enter` focuses the instance's zellij pane.
-- **Pinned sessions.** Sessions pinned with omp's `/pin` end with a grey pin and stay listed after
-  omp exits (`○`); `Enter` resumes them in a new zellij tab.
+- **Pinned sessions.** Sessions pinned with omp's `/pin` or agz's `p` end with a grey pin and stay
+  listed after omp exits (`○`); `Enter` resumes them in a new zellij tab.
 - **Session copy.** `d` splits the screen and shows a live, read-only copy of the selected
   session's screen under the list, exactly as omp draws it.
 - **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
@@ -39,8 +39,8 @@ omp exposes its run state only on its own terminal, so the repository holds two 
   each agent's state to `~/.omp/run/agentz/<pid>/<agentId>.json` whenever it changes.
 - **The `agz` binary** (Rust, [ratatui](https://ratatui.rs)). It watches those files, the omp
   processes, the git repositories and `~/.omp/agent/session-pins.json`, and redraws on change.
-  It never writes to omp's files. Usage comes from `omp usage --json`, which serves omp's own
-  cache, so agz needs no credentials of its own.
+  It writes only `session-pins.json`, on `p`, under the same lock as omp. Usage comes from
+  `omp usage --json`, which serves omp's own cache, so agz needs no credentials of its own.
 
 Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three timed refreshes: the
 git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
@@ -83,6 +83,7 @@ Run `agz` in a zellij pane. It renames its tab to `agentz`.
 | `↑` `↓` / `k` `j` | Move the cursor |
 | `Enter` | Go to the instance's pane (a subagent goes to its root's pane); resume a pinned session |
 | `Space` | Fold or unfold a root's subagents |
+| `p` | Pin or unpin the row's session (unpinning a dormant session removes its row) |
 | `d` | Open or close the session copy |
 | `Esc` | Close the session copy |
 | `q` / `Ctrl-C` | Quit |

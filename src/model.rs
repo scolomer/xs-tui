@@ -268,6 +268,18 @@ pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
     }
 }
 
+/// Session d'une ligne, celle que `p` épingle : un sous-agent compte pour sa racine ; aucune pour
+/// une ligne d'erreur.
+pub fn session_of(m: &Model, row: &Row) -> Option<String> {
+    match row.kind {
+        RowKind::Dormant => Some(row.key.1.clone()),
+        RowKind::Error => None,
+        RowKind::Root | RowKind::Sub { .. } => {
+            m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.session_id.clone())
+        }
+    }
+}
+
 /// Titre de la session de la ligne sélectionnée, pour la ligne de séparation de la copie.
 pub fn copy_title<'a>(m: &'a Model, row: Option<&Row>) -> Option<&'a str> {
     let row = row?;

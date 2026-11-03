@@ -196,8 +196,18 @@ de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visib
 
 La source est le `/pin` d'omp, qui bascule l'épingle de la session courante (`/pin <id>` pour une
 autre session) et range les ids épinglés dans `~/.omp/agent/session-pins.json` (tableau JSON, ordre
-d'épinglage). agz surveille ce fichier sans sondage et ne l'écrit jamais : épingler et
-désépingler se font uniquement depuis omp.
+d'épinglage). agz surveille ce fichier sans sondage. Il l'écrit seulement quand on appuie sur `p`,
+avec le même protocole qu'omp (`session-pins.ts`) :
+
+- verrou exclusif `flock` sur `session-pins.json.lock` ; omp utilise le même sur macOS, deux
+  écritures simultanées sont donc sérialisées. agz réessaie 20 fois à 50 ms d'intervalle, puis
+  affiche « Épingles verrouillées par un autre omp : réessayer » ;
+- relecture du fichier sous le verrou, ajout de l'id en fin de liste ou retrait ;
+- écriture dans `session-pins.json.<pid>.<n>.tmp` (mode 0600, indentation par tabulation comme
+  omp), puis `rename` sur `session-pins.json`.
+
+Un fichier illisible n'est jamais réécrit (« session-pins.json illisible : non modifié ») : omp le
+lirait comme vide, et toutes les épingles seraient perdues.
 
 - Session épinglée vivante : une instance dont le `sessionId` publié est épinglé. Elle reste une
   ligne vivante normale, marquée d'une épingle.
@@ -355,7 +365,7 @@ Anthropic
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
   dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
   consommation n'a pas la place de s'afficher.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  d détail  q quitter`.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
 
@@ -366,6 +376,7 @@ Anthropic
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une session dormante, la reprend (voir ci-dessous). |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
+| `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
 | `d` | Ouvrir ou fermer la copie de session (voir « Copie de session »). |
 | `Échap` | Fermer la copie de session. |
 | `q`, `Ctrl-C` | Quitter. |
@@ -395,6 +406,8 @@ Anthropic
 
 ## Risques connus
 
+- Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
+  `p` dans agz simultané à un `/pin` dans omp peut perdre l'une des deux modifications.
 - L'extension recopie la logique d'état d'omp (`event-controller.ts`) faute de hook exposant
   directement son `RunStatus`. Un changement dans omp peut faire diverger l'état affiché sans erreur.
 - L'état (publié par l'extension) et la branche (lue par agz) viennent de deux sources
