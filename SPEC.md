@@ -222,6 +222,11 @@ son `sessionId`.
   titre est en texte normal.
 - Les titres sont alignés en colonne, au moins deux espaces après la plus large branche.
 - Le segment ` <branche>` est absent hors dépôt git.
+- À la racine d'un worktree lié rangé à côté du dépôt principal sous le nom
+  `<dépôt principal>.<suffixe>` (ex. `backend.services.data-management-service.feature-sc-134990-…`),
+  le segment dossier montre le nom du dépôt principal : le suffixe reprend la branche, déjà
+  affichée. Un sous-dossier du worktree garde son propre nom ; un clone séparé (`throttler.old`,
+  avec son propre `.git`) n'est pas concerné.
 - Le titre est affiché tel quel ; rien tant que la session n'a pas de titre.
 - La ligne est tronquée à droite si elle dépasse la largeur.
 - Une session épinglée se termine par une épingle `nf-md-pin` (U+F0403) grise, après le titre et

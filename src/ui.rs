@@ -300,7 +300,11 @@ fn pin() -> Span<'static> {
 /// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
 /// `+indexés` et `?non suivis` non nuls.
 fn location<'a>(m: &'a Model, cwd: &Path) -> Vec<Span<'a>> {
-    let folder = folder_name(cwd);
+    // À la racine d'un worktree `<dépôt>.<branche>`, le nom du dépôt : la branche suit déjà.
+    let folder = match m.repo(cwd).and_then(|r| r.alias.as_ref()) {
+        Some((root, main)) if root == cwd => main.clone(),
+        _ => folder_name(cwd),
+    };
     let mut out = vec![
         Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)),
         Span::styled("\u{e0b0}", Color::Blue),

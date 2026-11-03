@@ -19,6 +19,9 @@ pub struct Repo {
     pub git_dir: PathBuf,
     pub label: Option<String>,
     pub counts: Counts,
+    /// Worktree lié rangé à côté du dépôt principal sous le nom `<dépôt>.<suffixe>` : (racine du
+    /// worktree, nom du dossier du dépôt principal), à afficher à la place du nom de la racine.
+    pub alias: Option<(PathBuf, String)>,
 }
 
 /// Compteurs du segment git d'omp, au sens de `git status --porcelain` : un fichier indexé puis
@@ -42,7 +45,26 @@ impl Counts {
 /// Dépôt contenant `cwd`, ou `None` hors dépôt.
 pub fn inspect(cwd: &Path) -> Option<Repo> {
     let repo = gix::discover(cwd).ok()?;
-    Some(Repo { git_dir: repo.git_dir().to_path_buf(), label: head_label(&repo), counts: counts(&repo) })
+    Some(Repo {
+        git_dir: repo.git_dir().to_path_buf(),
+        label: head_label(&repo),
+        counts: counts(&repo),
+        alias: worktree_alias(&repo),
+    })
+}
+
+/// Nom du dépôt principal pour un worktree lié nommé `<dépôt principal>.<suffixe>` : le suffixe
+/// reprend la branche (`feature-sc-134990-…`), déjà affichée dans le segment branche.
+fn worktree_alias(repo: &gix::Repository) -> Option<(PathBuf, String)> {
+    // `commondir` d'un worktree vaut souvent `../..` : chemin à résoudre avant d'en prendre le parent.
+    let common = repo.common_dir().canonicalize().ok()?;
+    if common == repo.git_dir().canonicalize().ok()? {
+        return None;
+    }
+    let root = repo.workdir()?;
+    let main = common.parent()?.file_name()?.to_str()?;
+    let suffix = root.file_name()?.to_str()?.strip_prefix(main)?.strip_prefix('.')?;
+    (!suffix.is_empty()).then(|| (root.to_path_buf(), main.to_string()))
 }
 
 /// Équivalent de `git branch --show-current`, ou `@<git rev-parse --short HEAD>` si HEAD est détaché.
