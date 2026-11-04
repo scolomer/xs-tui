@@ -54,6 +54,12 @@ pub fn header(agent_dir: &Path, id: &str) -> Option<Pinned> {
     Some(Pinned { id: id.to_string(), cwd, title })
 }
 
+/// Vrai si omp a écrit le fichier de la session `id` : il ne le fait qu'à la première réponse du
+/// modèle, et une session sans fichier ne peut pas être reprise.
+pub fn has_session_file(agent_dir: &Path, id: &str) -> bool {
+    session_file(agent_dir, id).is_some()
+}
+
 /// Fichier `sessions/<dossier>/<ts>_<id>.jsonl` d'une session main ; les sous-agents sont plus bas.
 fn session_file(agent_dir: &Path, id: &str) -> Option<PathBuf> {
     let suffix = format!("_{id}.jsonl");

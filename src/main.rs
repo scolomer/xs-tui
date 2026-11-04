@@ -346,7 +346,14 @@ impl App {
                     self.notify(message);
                 } else {
                     let title = if root.title.is_empty() { "cette session" } else { root.title.as_str() };
-                    self.notify(format!("Fermer “{title}” ? x pour confirmer"));
+                    // Sans fichier de session, rien à reprendre : l'épingle sera ignorée une fois omp fermé.
+                    let empty = self.model.is_pinned(&root.session_id)
+                        && !pins::has_session_file(&self.agent_dir, &root.session_id);
+                    self.notify(if empty {
+                        format!("“{title}” est vide : son épingle sera perdue. x pour fermer")
+                    } else {
+                        format!("Fermer “{title}” ? x pour confirmer")
+                    });
                     self.close_pending = Some((root_key, Instant::now()));
                 }
             }

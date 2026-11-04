@@ -405,8 +405,12 @@ Anthropic
   (« cette session » sans titre). Un second `x` dans les 3 s ferme le pane avec `zellij action
   close-pane --pane-id terminal_<paneId>` ; toute autre touche, ou 3 s d'attente, annule. zellij
   envoie alors `SIGHUP` à omp, qui fait sa fermeture normale (session sauvegardée, dossier publié
-  supprimé), et la ligne disparaît. Une instance hors de portée affiche le même message qu'Entrée ;
-  `x` est sans effet sur une session dormante ou une ligne d'erreur.
+  supprimé). Une session épinglée devient dormante ; sinon sa ligne disparaît. Une instance hors
+  de portée affiche le même message qu'Entrée ; `x` est sans effet sur une session dormante ou une
+  ligne d'erreur.
+- Une session épinglée sans fichier de session (aucune réponse du modèle : omp ne l'écrit qu'à la
+  première) ne peut pas devenir dormante, il n'y a rien à reprendre. Le premier `x` l'annonce à la
+  place de la question : « “<titre>” est vide : son épingle sera perdue. x pour fermer ».
 - Au démarrage dans zellij, agz renomme son onglet en `agentz` (`zellij action
   rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
   en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.
