@@ -19,8 +19,8 @@ pub struct Repo {
     pub git_dir: PathBuf,
     pub label: Option<String>,
     pub counts: Counts,
-    /// Worktree lié rangé à côté du dépôt principal sous le nom `<dépôt>.<suffixe>` : (racine du
-    /// worktree, nom du dossier du dépôt principal), à afficher à la place du nom de la racine.
+    /// Worktree lié : (racine du worktree, nom du dossier du dépôt principal), à afficher à la place
+    /// du nom de la racine.
     pub alias: Option<(PathBuf, String)>,
 }
 
@@ -53,18 +53,16 @@ pub fn inspect(cwd: &Path) -> Option<Repo> {
     })
 }
 
-/// Nom du dépôt principal pour un worktree lié nommé `<dépôt principal>.<suffixe>` : le suffixe
-/// reprend la branche (`feature-sc-134990-…`), déjà affichée dans le segment branche.
+/// Nom du dépôt principal pour un worktree lié : le nom de son dossier (`<dépôt>.<branche>`,
+/// `~/.omp/wt/<branche>-<hash>` d'omp) reprend la branche, déjà affichée dans le segment branche.
 fn worktree_alias(repo: &gix::Repository) -> Option<(PathBuf, String)> {
     // `commondir` d'un worktree vaut souvent `../..` : chemin à résoudre avant d'en prendre le parent.
     let common = repo.common_dir().canonicalize().ok()?;
     if common == repo.git_dir().canonicalize().ok()? {
         return None;
     }
-    let root = repo.workdir()?;
     let main = common.parent()?.file_name()?.to_str()?;
-    let suffix = root.file_name()?.to_str()?.strip_prefix(main)?.strip_prefix('.')?;
-    (!suffix.is_empty()).then(|| (root.to_path_buf(), main.to_string()))
+    Some((repo.workdir()?.to_path_buf(), main.to_string()))
 }
 
 /// Équivalent de `git branch --show-current`, ou `@<git rev-parse --short HEAD>` si HEAD est détaché.

@@ -300,7 +300,7 @@ fn pin() -> Span<'static> {
 /// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
 /// `+indexés` et `?non suivis` non nuls.
 fn location<'a>(m: &'a Model, cwd: &Path) -> Vec<Span<'a>> {
-    // À la racine d'un worktree `<dépôt>.<branche>`, le nom du dépôt : la branche suit déjà.
+    // À la racine d'un worktree lié, le nom du dépôt principal : la branche suit déjà.
     let folder = match m.repo(cwd).and_then(|r| r.alias.as_ref()) {
         Some((root, main)) if root == cwd => main.clone(),
         _ => folder_name(cwd),
