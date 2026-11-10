@@ -36,6 +36,9 @@ pub struct Model {
     /// Racines repliées.
     pub folded: HashSet<Key>,
     pub selected: Option<Key>,
+    /// Session de la ligne sélectionnée au dernier `select_after_rebuild`, avec la clé de cette
+    /// ligne : le curseur suit la session quand sa ligne change de forme (reprise, fermeture).
+    pub selected_session: Option<(Key, String)>,
     /// Message temporaire de la barre du bas.
     pub message: Option<(String, Instant)>,
     /// Frame du spinner.
@@ -44,6 +47,8 @@ pub struct Model {
     pub usage: Vec<crate::usage::Account>,
     /// Dernier échec de relecture de la consommation.
     pub usage_error: Option<String>,
+    /// Ids des panes headless (« supprimés » par zellij) de la session zellij d'agz.
+    pub headless: HashSet<String>,
 }
 
 impl Model {
@@ -55,6 +60,11 @@ impl Model {
     /// Vrai si la session `session_id` est épinglée.
     pub fn is_pinned(&self, session_id: &str) -> bool {
         self.pins.iter().any(|id| id == session_id)
+    }
+
+    /// Vrai si `target`, pane d'une instance, est headless dans la session zellij `own` d'agz.
+    pub fn is_headless(&self, own: Option<&str>, target: Option<&Zellij>) -> bool {
+        target.is_some_and(|z| own == Some(z.session.as_str()) && self.headless.contains(&z.pane_id))
     }
 
     /// Ids épinglés qu'aucune instance ne publie, dans l'ordre des épingles.
@@ -217,15 +227,39 @@ fn push_children(
     }
 }
 
-/// Garde le curseur sur l'élément sélectionné ; s'il a disparu, passe au plus proche ancêtre
+/// Garde le curseur sur l'élément sélectionné. Si sa ligne a disparu, suit sa session sous son autre
+/// forme (session dormante reprise, session épinglée fermée), sinon passe au plus proche ancêtre
 /// encore affiché, sinon à la ligne voisine.
 pub fn select_after_rebuild(m: &mut Model, before: &[Row], after: &[Row]) {
+    reselect(m, before, after);
+    m.selected_session = m.selected.as_ref().and_then(|key| {
+        let row = after.iter().find(|r| &r.key == key)?;
+        Some((key.clone(), session_of(m, row)?.to_owned()))
+    });
+}
+
+fn reselect(m: &mut Model, before: &[Row], after: &[Row]) {
     let Some(selected) = m.selected.clone() else {
         m.selected = after.first().map(|r| r.key.clone());
         return;
     };
     let present = |key: &Key| after.iter().any(|r| &r.key == key);
     if present(&selected) {
+        return;
+    }
+    // Une session dormante a son id pour clé ; celle d'une instance est notée au passage précédent.
+    let session = match &m.selected_session {
+        _ if selected.0 == DORMANT_PID => Some(selected.1.as_str()),
+        Some((key, session)) if *key == selected => Some(session.as_str()),
+        _ => None,
+    };
+    let moved = session.and_then(|session| {
+        after
+            .iter()
+            .find(|r| matches!(r.kind, RowKind::Root | RowKind::Dormant) && session_of(m, r) == Some(session))
+    });
+    if let Some(row) = moved {
+        m.selected = Some(row.key.clone());
         return;
     }
     let find_before = |key: &Key| before.iter().position(|r| &r.key == key);
@@ -270,12 +304,12 @@ pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
 
 /// Session d'une ligne, celle que `p` épingle : un sous-agent compte pour sa racine ; aucune pour
 /// une ligne d'erreur.
-pub fn session_of(m: &Model, row: &Row) -> Option<String> {
+pub fn session_of<'a>(m: &'a Model, row: &'a Row) -> Option<&'a str> {
     match row.kind {
-        RowKind::Dormant => Some(row.key.1.clone()),
+        RowKind::Dormant => Some(row.key.1.as_str()),
         RowKind::Error => None,
         RowKind::Root | RowKind::Sub { .. } => {
-            m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.session_id.clone())
+            m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.session_id.as_str())
         }
     }
 }
@@ -430,5 +464,37 @@ mod tests {
         assert_eq!(source((1, "A")), CopySource::Pane(&pane));
         assert_eq!(source((2, "Main")), CopySource::Message("Instance hors zellij"));
         assert_eq!(source((DORMANT_PID, "x")), CopySource::Message("Session dormante"));
+    }
+
+    #[test]
+    fn cursor_follows_a_resumed_session_into_the_instances() {
+        let mut m = model(vec![rec(1, "Main", None, "a")]);
+        m.headers = headers(&["x", "y"]);
+        let before = rows(&m);
+        m.selected = Some((DORMANT_PID, "x".into()));
+        let mut resumed = rec(2, "Main", None, "b");
+        resumed.session_id = "x".into();
+        m.instances.insert((2, "Main".into()), resumed);
+        m.headers.remove(0);
+        let after = rows(&m);
+        select_after_rebuild(&mut m, &before, &after);
+        assert_eq!(m.selected, Some((2, "Main".into())));
+    }
+
+    #[test]
+    fn cursor_follows_a_closed_pinned_session_into_the_dormant_block() {
+        let mut closed = rec(2, "Main", None, "b");
+        closed.session_id = "x".into();
+        let mut m = model(vec![rec(1, "Main", None, "a"), closed]);
+        m.headers = headers(&["y"]);
+        let before = rows(&m);
+        m.selected = Some((2, "Main".into()));
+        select_after_rebuild(&mut m, &before, &before);
+        m.instances.remove(&(2, "Main".into()));
+        // La voisine de l'instance fermée serait `y`.
+        m.headers = headers(&["y", "x"]);
+        let after = rows(&m);
+        select_after_rebuild(&mut m, &before, &after);
+        assert_eq!(m.selected, Some((DORMANT_PID, "x".into())));
     }
 }

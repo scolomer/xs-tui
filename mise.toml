@@ -1,5 +1,5 @@
 [tools]
-rust = "latest"
+rust = { version = "latest", targets = "wasm32-wasip1" }
 bun = "latest"
 
 [tasks.build]
@@ -33,5 +33,5 @@ description = "Vérifie que omp charge l'extension agentz installée et qu'elle 
 run = "bun extension/scripts/check.ts"
 
 [tasks.test]
-description = "Tests Rust et extension"
-run = ["cargo test", "bun test --cwd extension"]
+description = "Tests Rust (agz et plugin zellij) et extension"
+run = ["cargo test", "cargo test --manifest-path plugin/Cargo.toml", "bun test --cwd extension"]

@@ -16,7 +16,8 @@ use crate::usage::{self, Status};
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const HELP: &str = "↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  x fermer  d détail  q quitter";
+const HELP: &str =
+    "↑↓/jk naviguer  ⏎ aller au pane  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
 const EMPTY: &str = "Aucune instance omp";
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;
@@ -63,7 +64,8 @@ pub fn draw(
             RowKind::Dormant => m.dormant(&r.key).map(|p| p.cwd.as_path()),
             _ => None,
         })
-        .map(|cwd| width(&location(m, cwd)))
+        // La largeur du segment ne dépend pas de son style.
+        .map(|cwd| width(&location(m, cwd, Folder::Live)))
         .max()
         .unwrap_or(0);
     let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, own_zellij, title_col)).collect();
@@ -231,7 +233,7 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     if row.kind == RowKind::Dormant {
         let Some(p) = m.dormant(&row.key) else { return Line::default() };
         let mut spans = vec![Span::styled("○", Color::DarkGray), Span::raw(" ")];
-        spans.extend(location(m, &p.cwd));
+        spans.extend(location(m, &p.cwd, Folder::Dormant));
         let pad = (title_col + 1).saturating_sub(width(&spans[2..]));
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::raw(p.title.as_str()));
@@ -259,7 +261,8 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
         RowKind::Error | RowKind::Dormant => unreachable!(),
     };
     if show_location {
-        after = location(m, &rec.cwd);
+        let style = if m.is_headless(own_zellij, root.zellij.as_ref()) { Folder::Headless } else { Folder::Live };
+        after = location(m, &rec.cwd, style);
     }
     match row.kind {
         RowKind::Root => {
@@ -296,20 +299,37 @@ fn pin() -> Span<'static> {
     Span::styled(" \u{f0403}", Color::DarkGray)
 }
 
+/// Style du segment dossier : fond bleu pour une instance, gris foncé pour une instance headless,
+/// aucun fond pour une session dormante (dossier gris, espace à la place de la flèche).
+#[derive(Clone, Copy)]
+enum Folder {
+    Live,
+    Headless,
+    Dormant,
+}
+
 /// Segment powerline du dossier, puis branche git s'il y en a une, comme le segment git d'omp :
 /// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
-/// `+indexés` et `?non suivis` non nuls.
-fn location<'a>(m: &'a Model, cwd: &Path) -> Vec<Span<'a>> {
+/// `+indexés` et `?non suivis` non nuls. La largeur ne dépend pas de `style`.
+fn location<'a>(m: &'a Model, cwd: &Path, style: Folder) -> Vec<Span<'a>> {
     // À la racine d'un worktree lié, le nom du dépôt principal : la branche suit déjà.
     let folder = match m.repo(cwd).and_then(|r| r.alias.as_ref()) {
         Some((root, main)) if root == cwd => main.clone(),
         _ => folder_name(cwd),
     };
-    let mut out = vec![
-        Span::styled(format!(" \u{f115} {folder} "), Style::new().bg(Color::Blue).fg(Color::Black)),
-        Span::styled("\u{e0b0}", Color::Blue),
-        Span::raw(" "),
-    ];
+    let segment = format!(" \u{f115} {folder} ");
+    let mut out = match style {
+        Folder::Live => vec![
+            Span::styled(segment, Style::new().bg(Color::Blue).fg(Color::Black)),
+            Span::styled("\u{e0b0}", Color::Blue),
+        ],
+        Folder::Headless => vec![
+            Span::styled(segment, Style::new().bg(Color::DarkGray).fg(Color::Black)),
+            Span::styled("\u{e0b0}", Color::DarkGray),
+        ],
+        Folder::Dormant => vec![Span::styled(segment, Color::DarkGray), Span::raw(" ")],
+    };
+    out.push(Span::raw(" "));
     if let Some(repo) = m.repo(cwd)
         && let Some(branch) = &repo.label
     {

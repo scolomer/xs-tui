@@ -26,8 +26,10 @@ use ratatui::widgets::ListState;
 
 use mirror::Mirror;
 use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
+use pins::Pinned;
 use record::{Kind, Parsed, State};
 use watch::Event;
+use zellij::Headless;
 
 const SPINNER_FRAME: Duration = Duration::from_millis(100);
 const MESSAGE_TTL: Duration = Duration::from_secs(3);
@@ -57,6 +59,10 @@ struct App {
     usage: Sender<()>,
     /// Racine dont la fermeture attend un second `x`, et heure du premier.
     close_pending: Option<(Key, Instant)>,
+    /// Plugin zellij des sessions headless, ou la raison de son absence.
+    plugin: Result<zellij::Plugin, String>,
+    /// Demandes au thread qui relit les panes headless.
+    headless: Sender<()>,
 }
 
 fn main() {
@@ -76,6 +82,13 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let headless = zellij::spawn_headless_refresher(tx.clone());
+    let own_zellij = std::env::var("ZELLIJ_SESSION_NAME").ok();
+    let plugin = match own_zellij {
+        None => Err("agz hors zellij : arrière-plan impossible".to_string()),
+        Some(_) => zellij::Plugin::install(&home.join(".cache/agz"), headless.clone())
+            .map_err(|err| format!("plugin agentz : {err}")),
+    };
     let mut app = App {
         model: Model::default(),
         rows: Vec::new(),
@@ -84,7 +97,7 @@ fn main() {
         omp_dir,
         agent_dir,
         home,
-        own_zellij: std::env::var("ZELLIJ_SESSION_NAME").ok(),
+        own_zellij,
         tx: tx.clone(),
         watcher,
         git_dirs: HashSet::new(),
@@ -93,6 +106,8 @@ fn main() {
         mirror: None,
         usage: usage::spawn_refresher(tx.clone()),
         close_pending: None,
+        plugin,
+        headless,
     };
 
     let mut terminal = ratatui::init();
@@ -101,6 +116,7 @@ fn main() {
     app.load_pins();
     app.refresh_headers();
     app.request_git();
+    app.request_headless();
     app.rebuild();
     // Seulement au démarrage : la fonction fish de l'onglet remet son nom à la commande suivante.
     if app.own_zellij.is_some()
@@ -153,6 +169,8 @@ impl App {
                         self.model.usage_error = None;
                     }
                     Event::Usage(Err(message)) => self.model.usage_error = Some(message),
+                    Event::Notice(message) => self.notify(message),
+                    Event::Headless(panes) => self.model.headless = panes,
                     Event::Resize => {}
                     Event::Key(key) => {
                         if !self.key(key) {
@@ -261,6 +279,15 @@ impl App {
         if turn_ended {
             let _ = self.usage.send(());
         }
+        // Une instance apparue, disparue ou déplacée : son pane a pu changer d'état.
+        self.request_headless();
+    }
+
+    /// Demande la relecture des panes headless, dans zellij seulement.
+    fn request_headless(&self) {
+        if self.own_zellij.is_some() {
+            let _ = self.headless.send(());
+        }
     }
 
     /// Relit `session-pins.json`.
@@ -342,7 +369,7 @@ impl App {
                     if let Err(message) = zellij::close(own, root.zellij.as_ref()) {
                         self.notify(message);
                     }
-                } else if let Err(message) = zellij::check_close(own, root.zellij.as_ref()) {
+                } else if let Err(message) = zellij::check_target(own, root.zellij.as_ref()) {
                     self.notify(message);
                 } else {
                     let title = if root.title.is_empty() { "cette session" } else { root.title.as_str() };
@@ -379,7 +406,7 @@ impl App {
             }
             KeyCode::Char('p') => {
                 let Some(id) = index.and_then(|i| model::session_of(&self.model, &self.rows[i])) else { return true };
-                match pins::toggle(&self.agent_dir, &id) {
+                match pins::toggle(&self.agent_dir, id) {
                     // Sans attendre l'événement du watcher, qui relira le même fichier.
                     Ok(_) => self.load_pins(),
                     Err(message) => self.notify(message),
@@ -387,24 +414,83 @@ impl App {
             }
             KeyCode::Enter => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
+                let own = self.own_zellij.as_deref();
                 let result = if let Some(p) = self.model.dormant(&row.key) {
-                    if self.model.is_live(&p.id) || pins::lease_held(&self.omp_dir, &p.id) {
-                        Err("Session déjà ouverte par un autre omp".to_string())
-                    } else {
-                        let cwd = if p.cwd.is_dir() { &p.cwd } else { &self.home };
-                        zellij::resume(self.own_zellij.as_deref(), &p.id, cwd)
-                    }
+                    self.dormant_cwd(p).and_then(|cwd| zellij::resume(own, &p.id, cwd))
                 } else {
                     // Un sous-agent partage le pane de sa racine.
                     let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
-                    zellij::focus(self.own_zellij.as_deref(), root.zellij.as_ref())
+                    match root.zellij.as_ref() {
+                        // Un pane headless n'est dans aucun onglet : le plugin le sort dans le sien.
+                        Some(z) if self.model.is_headless(own, Some(z)) => self.headless(Headless::Show(&z.pane_id)),
+                        target => zellij::focus(own, target),
+                    }
                 };
                 if let Err(message) = result {
                     self.notify(message);
                 }
             }
+            KeyCode::Char('s') => {
+                let Some(row) = index.map(|i| &self.rows[i]) else { return true };
+                let message = match self.model.dormant(&row.key) {
+                    Some(p) => {
+                        let resumed = self.dormant_cwd(p).and_then(|cwd| self.headless(Headless::Resume { id: &p.id, cwd }));
+                        resumed.map_or_else(|message| message, |()| format!("{} reprise en arrière-plan", label(&p.title)))
+                    }
+                    None if row.kind == RowKind::Error => return true,
+                    None => {
+                        let root = self.model.instances.get(&(row.key.0, ROOT_ID.to_string()));
+                        if root.is_some_and(|r| self.model.is_headless(self.own_zellij.as_deref(), r.zellij.as_ref())) {
+                            "Session déjà en arrière-plan".to_string()
+                        } else {
+                            "Session déjà ouverte : D pour la passer en arrière-plan".to_string()
+                        }
+                    }
+                };
+                self.notify(message);
+            }
+            KeyCode::Char('D') => {
+                let Some(row) = index.map(|i| &self.rows[i]) else { return true };
+                let message = match row.kind {
+                    RowKind::Error => return true,
+                    RowKind::Dormant => "Session dormante : s pour la reprendre en arrière-plan".to_string(),
+                    RowKind::Root | RowKind::Sub { .. } => {
+                        // Un sous-agent partage le pane de sa racine.
+                        let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
+                        let own = self.own_zellij.as_deref();
+                        if self.model.is_headless(own, root.zellij.as_ref()) {
+                            "Session déjà en arrière-plan".to_string()
+                        } else {
+                            let hidden = zellij::check_target(own, root.zellij.as_ref())
+                                .and_then(|z| self.headless(Headless::Hide(&z.pane_id)));
+                            hidden.map_or_else(|message| message, |()| format!("{} passée en arrière-plan", label(&root.title)))
+                        }
+                    }
+                };
+                self.notify(message);
+            }
             _ => {}
         }
         true
     }
+
+    /// Dossier où reprendre la session dormante `p` (`$HOME` s'il a disparu), si aucun omp ne l'a
+    /// déjà ouverte.
+    fn dormant_cwd<'a>(&'a self, p: &'a Pinned) -> Result<&'a Path, String> {
+        if self.model.is_live(&p.id) || pins::lease_held(&self.omp_dir, &p.id) {
+            return Err("Session déjà ouverte par un autre omp".to_string());
+        }
+        Ok(if p.cwd.is_dir() { &p.cwd } else { &self.home })
+    }
+
+    /// Envoie `command` au plugin agentz ; sa réponse arrive plus tard (`Event::Notice`).
+    fn headless(&self, command: Headless) -> Result<(), String> {
+        self.plugin.as_ref().map_err(Clone::clone)?.send(command, &self.tx);
+        Ok(())
+    }
+}
+
+/// Titre d'une session pour un message : `“<titre>”`, ou « Session » sans titre.
+fn label(title: &str) -> String {
+    if title.is_empty() { "Session".to_string() } else { format!("“{title}”") }
 }

@@ -11,8 +11,9 @@ permet d'aller au pane zellij d'une instance.
 - Mise à jour dynamique : apparition, disparition et changement d'état des instances sans action de l'utilisateur.
 - Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
-  agz.
+  agz, au premier plan ou en arrière-plan.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
+- Sessions headless : instances omp affichées dans aucun onglet zellij (touches `s` et `D`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Plateformes : macOS et Linux.
 
@@ -33,6 +34,9 @@ flowchart LR
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
   Z -.->|zellij action dump-screen, copie ouverte| T
+  T -->|zellij pipe : s, D, Entrée| P[plugin zellij agentz]
+  P -->|pane caché, ou sorti dans un onglet| Z
+  Z -.->|zellij action list-panes : panes headless| T
   U["omp usage --json"] -->|fin de tour, reset, 15 min| T
 ```
 
@@ -40,17 +44,20 @@ omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, O
 fichier ni socket ne le rend lisible par un autre process. Une extension omp publie donc l'état de
 chaque agent dans un fichier JSON, et agz surveille ces fichiers.
 
-Le dépôt contient les deux composants :
+Le dépôt contient trois composants :
 
 - racine : le binaire Rust `agz` ;
 - `extension/` : l'extension omp agentz (paquet bun/TypeScript), installée par lien symbolique
-  `~/.omp/agent/extensions/agentz -> <dépôt>/extension`, comme omp-cron et omp-q.
+  `~/.omp/agent/extensions/agentz -> <dépôt>/extension`, comme omp-cron et omp-q ;
+- `plugin/` : le plugin zellij agentz (Rust, cible `wasm32-wasip1`), compilé par `build.rs` et
+  embarqué dans `agz` (voir « Sessions headless »).
 
 `mise run install` installe `agz` dans `~/.cargo/bin` (`cargo install`) puis l'extension ;
 `mise run extension:install` installe seulement l'extension (`bun install` et création ou mise à
 jour de ce lien). `mise run extension:check` vérifie que ce lien vise bien `extension/` de ce
 dépôt, puis lance un omp jetable (`omp --no-session`, dans un pseudo-terminal et un dossier
-temporaire), attend son fichier publié et vérifie qu'il disparaît après `/exit`.
+temporaire), attend son fichier publié et vérifie qu'il disparaît après `/exit`. La compilation
+d'agz demande la cible `wasm32-wasip1`, déclarée dans `mise.toml`.
 
 Le format du fichier évolue dans le même commit côté producteur et côté consommateur.
 
@@ -231,8 +238,10 @@ son `sessionId`.
 ```
 
 - Le dossier est un segment powerline : ` <dossier>` sur fond coloré, suivi de `` dans
-  la couleur de ce fond pour la transition. La branche est colorée selon le statut du dépôt, le
-  titre est en texte normal.
+  la couleur de ce fond pour la transition. Le fond est bleu ; il est gris foncé pour une instance
+  headless (voir « Sessions headless »), y compris sur le segment d'un sous-agent qui en descend.
+  Le texte du segment est noir. La branche est colorée selon le statut du dépôt, le titre est en
+  texte normal.
 - Les titres sont alignés en colonne, au moins deux espaces après la plus large branche.
 - Le segment ` <branche>` est absent hors dépôt git.
 - À la racine d'un worktree lié, le segment dossier montre le nom du dépôt principal : le nom du
@@ -248,11 +257,12 @@ son `sessionId`.
 ### Ligne d'une session dormante
 
 ```
-○  <dernier segment du cwd>   <branche> <titre> 󰐃
+○  <dernier segment du cwd>    <branche> <titre> 󰐃
 ```
 
-- `○` gris à la place de l'indicateur d'état ; le reste suit le format d'une racine (segment
-  dossier, branche colorée, compteurs, titre aligné, épingle grise en fin de ligne).
+- `○` gris à la place de l'indicateur d'état. Le dossier est en gris, sans fond, et un espace
+  remplace `` : la ligne garde la largeur d'une racine et son titre reste aligné. Le reste
+  suit le format d'une racine (branche colorée, compteurs, titre, épingle grise en fin de ligne).
 - Dossier disparu (worktree supprimé) : aucun segment branche.
 
 ### Indicateur d'état
@@ -365,7 +375,7 @@ Anthropic
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
   dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
   consommation n'a pas la place de s'afficher.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  ␣ plier  p épingler  x fermer  d détail  q quitter`.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
 
@@ -374,7 +384,9 @@ Anthropic
 | Touche | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
-| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une session dormante, la reprend (voir ci-dessous). |
+| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous). |
+| `s` | Reprendre la session dormante en headless, sans quitter agz (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
+| `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
 | `x` | Fermer l'instance et son pane, après confirmation (voir ci-dessous). Sur un sous-agent, ferme sa racine. |
@@ -385,8 +397,9 @@ Anthropic
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
   (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'agz tourne.
 - Le curseur suit l'élément sélectionné (clé `pid` + `agent.id` pour une instance, id de session
-  pour une session dormante) quand la liste change. Si l'élément disparaît, le curseur passe à
-  son parent, sinon à la ligne voisine.
+  pour une session dormante) quand la liste change. Quand une session change de forme (session
+  dormante reprise par Entrée ou `s`, session épinglée fermée), le curseur la suit jusqu'à sa
+  nouvelle ligne. Si l'élément disparaît, le curseur passe à son parent, sinon à la ligne voisine.
 - Entrée sur une instance d'une autre session zellij affiche « Instance dans la session zellij
   “<nom>” » ; sur une instance hors zellij, « Instance hors zellij ». Aucune autre action.
 - Entrée sur une session dormante, comme le script `zellij-resume.sh` d'omp-sessions :
@@ -415,6 +428,55 @@ Anthropic
   rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
   en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.
 
+### Sessions headless
+
+Une session headless est une instance omp dont le pane zellij est « supprimé » : affiché dans aucun
+onglet, il garde son process, sa taille et son écran. zellij ne réserve ces panes qu'aux plugins :
+agz embarque le plugin zellij agentz (`plugin/`) et l'appelle par
+`zellij pipe --plugin file:<wasm> --name agentz -- <commande>`, dans un thread.
+
+- Plugin : compilé en `wasm32-wasip1` par `build.rs` et embarqué dans agz, qui l'écrit au
+  démarrage, dans zellij, sous `~/.cache/agz/agentz-<empreinte>.wasm` en supprimant les versions
+  précédentes. zellij garde en mémoire le code d'un plugin par chemin : une nouvelle version
+  change de nom pour être chargée, au prix d'une nouvelle demande de permissions.
+- Premier appel : zellij lance le plugin dans l'onglet actif, celui d'agz, en pane flottant qui
+  demande ses permissions (lire et changer l'état de l'application, lancer des commandes, lire les
+  pipes). Ce pane reste caché si la couche flottante de l'onglet l'est : sans réponse au bout de
+  3 s, agz l'affiche (`show-floating-panes --tab-id`, `focus-pane-id plugin_<id>`, le pane étant
+  retrouvé par son `plugin_url`) et annonce « agentz attend ses permissions : y dans son pane pour
+  accepter ». Une fois les permissions accordées, le plugin se cache et exécute la commande en
+  attente, sans jamais répondre au pipe qui l'attendait : agz cesse de l'attendre après 120 s.
+  zellij mémorise l'accord (`permissions.kdl`).
+- Commandes, une ligne par élément : le nom puis les arguments. Le plugin répond `ok` ou un
+  message d'erreur, affiché dans la barre (« agentz : <message> ») :
+  - `spawn <cwd> <programme> <arguments…>` : `open_command_pane_background`, puis
+    `break_panes_to_new_tab` sans focus et `hide_pane_with_id`. Un pane ouvert en arrière-plan a une
+    taille par défaut (92×28) ; passé par un onglet, il prend celle de la session et la garde une
+    fois caché. L'onglet vidé se ferme aussitôt.
+  - `show <pane>` : `break_panes_to_new_tab`, qui prend le focus.
+  - `hide <pane>` : `hide_pane_with_id`. Seul dans son onglet, le pane le quitte et l'onglet se
+    ferme.
+- Un pane caché est rattaché à l'onglet de plus petit id de la session ; quand cet onglet se
+  ferme, il passe dans un autre, sans mourir. Il meurt avec la session zellij.
+- État headless : agz lit les panes de terminal `is_suppressed` de
+  `zellij action list-panes --tab --state --json`, dans un thread, au démarrage, à chaque
+  relecture des fichiers publiés, et 200 ms puis 1 s après chaque commande du plugin. Seules les
+  instances de la session zellij d'agz peuvent être headless pour agz.
+- `s` sur une session dormante : mêmes vérifications qu'Entrée (« Session déjà ouverte par un
+  autre omp »), puis `spawn` de `fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`
+  et « “<titre>” reprise en arrière-plan » (« Session reprise en arrière-plan » sans titre). Une
+  fois omp relancé, la ligne remonte parmi les instances, avec son état et sa copie `d`. Sur une
+  instance headless : « Session déjà en arrière-plan » ; sur une autre instance : « Session déjà
+  ouverte : D pour la passer en arrière-plan ».
+- `D` sur une instance de la session zellij d'agz : `hide`, et « “<titre>” passée en
+  arrière-plan ». Déjà headless : « Session déjà en arrière-plan » ; session dormante : « Session
+  dormante : s pour la reprendre en arrière-plan » ; instance hors de portée : même message
+  qu'Entrée.
+- Entrée sur une instance headless : `show` ; le pane passe dans un nouvel onglet, qui prend le
+  focus.
+- `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`).
+- agz hors zellij : « agz hors zellij : arrière-plan impossible » pour `s` et `D`.
+
 ## Risques connus
 
 - Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
@@ -430,3 +492,9 @@ Anthropic
 - Une session reprise par un omp qui ne publie pas (lancé avant l'installation de l'extension) et
   restée sans écriture depuis apparaît dormante : omp ne prend son bail qu'à la première écriture.
   Entrée la rouvrirait alors une seconde fois.
+- Le plugin contourne zellij 0.45.1 : `break_panes_to_tab_with_id` ne déplace rien et
+  `break_panes_to_tab_with_index` perd le pane (process vivant, absent de `list-panes`), d'où le
+  passage par un nouvel onglet ; chaque `zellij pipe` lui arrive une seconde fois sans contenu,
+  qu'il ignore ; `open_command_pane_background` ignore le dossier demandé, que fixe le `cd` du
+  script fish. Une autre version de zellij peut changer ces comportements.
+- `spawn` crée puis ferme un onglet : il peut apparaître un instant dans la barre d'onglets.
