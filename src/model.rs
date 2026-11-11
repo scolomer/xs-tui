@@ -47,7 +47,7 @@ pub struct Model {
     pub usage: Vec<crate::usage::Account>,
     /// Dernier échec de relecture de la consommation.
     pub usage_error: Option<String>,
-    /// Ids des panes headless (« supprimés » par zellij) de la session zellij d'agz.
+    /// Ids des panes headless (« supprimés » par zellij) de la session zellij d'xst.
     pub headless: HashSet<String>,
 }
 
@@ -62,7 +62,7 @@ impl Model {
         self.pins.iter().any(|id| id == session_id)
     }
 
-    /// Vrai si `target`, pane d'une instance, est headless dans la session zellij `own` d'agz.
+    /// Vrai si `target`, pane d'une instance, est headless dans la session zellij `own` d'xst.
     pub fn is_headless(&self, own: Option<&str>, target: Option<&Zellij>) -> bool {
         target.is_some_and(|z| own == Some(z.session.as_str()) && self.headless.contains(&z.pane_id))
     }

@@ -1,6 +1,6 @@
-//! agz : tableau de bord des instances omp interactives et de leurs sous-agents.
+//! xst : tableau de bord des instances omp interactives et de leurs sous-agents.
 //!
-//! L'extension agentz (`extension/`) publie l'état de chaque agent dans `~/.omp/run/agentz/<pid>/` ;
+//! L'extension xs-tui (`extension/`) publie l'état de chaque agent dans `~/.omp/run/xs-tui/<pid>/` ;
 //! ce binaire surveille ces fichiers, la vie des pids et les HEAD git, et redessine à chaque
 //! changement (voir SPEC.md).
 
@@ -67,27 +67,27 @@ struct App {
 
 fn main() {
     let Some(home) = std::env::var_os("HOME") else {
-        eprintln!("agz: HOME non défini");
+        eprintln!("xst: HOME non défini");
         std::process::exit(1);
     };
     let home = PathBuf::from(home);
     let omp_dir = home.join(".omp");
     let agent_dir = omp_dir.join("agent");
-    let run_dir = omp_dir.join("run/agentz");
+    let run_dir = omp_dir.join("run/xs-tui");
     let (tx, rx) = mpsc::channel();
     let watcher = match watch::start(&run_dir, &agent_dir, tx.clone()) {
         Ok(w) => w,
         Err(err) => {
-            eprintln!("agz: surveillance de {} impossible : {err}", run_dir.display());
+            eprintln!("xst: surveillance de {} impossible : {err}", run_dir.display());
             std::process::exit(1);
         }
     };
     let headless = zellij::spawn_headless_refresher(tx.clone());
     let own_zellij = std::env::var("ZELLIJ_SESSION_NAME").ok();
     let plugin = match own_zellij {
-        None => Err("agz hors zellij : arrière-plan impossible".to_string()),
-        Some(_) => zellij::Plugin::install(&home.join(".cache/agz"), headless.clone())
-            .map_err(|err| format!("plugin agentz : {err}")),
+        None => Err("xst hors zellij : arrière-plan impossible".to_string()),
+        Some(_) => zellij::Plugin::install(&home.join(".cache/xst"), headless.clone())
+            .map_err(|err| format!("plugin xs-tui : {err}")),
     };
     let mut app = App {
         model: Model::default(),
@@ -128,7 +128,7 @@ fn main() {
     let result = app.run(&mut terminal, &rx);
     ratatui::restore();
     if let Err(err) = result {
-        eprintln!("agz: {err}");
+        eprintln!("xst: {err}");
         std::process::exit(1);
     }
 }
@@ -483,7 +483,7 @@ impl App {
         Ok(if p.cwd.is_dir() { &p.cwd } else { &self.home })
     }
 
-    /// Envoie `command` au plugin agentz ; sa réponse arrive plus tard (`Event::Notice`).
+    /// Envoie `command` au plugin xs-tui ; sa réponse arrive plus tard (`Event::Notice`).
     fn headless(&self, command: Headless) -> Result<(), String> {
         self.plugin.as_ref().map_err(Clone::clone)?.send(command, &self.tx);
         Ok(())

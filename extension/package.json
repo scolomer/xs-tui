@@ -1,11 +1,11 @@
 {
-  "name": "agentz",
+  "name": "xs-tui",
   "version": "0.1.0",
-  "description": "omp extension: publishes each agent's run state for the agz dashboard",
+  "description": "omp extension: publishes each agent's run state for the xst dashboard",
   "type": "module",
   "private": true,
   "omp": {
-    "extensions": ["./src/agentz.ts"]
+    "extensions": ["./src/xs-tui.ts"]
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

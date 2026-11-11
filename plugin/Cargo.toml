@@ -1,5 +1,5 @@
 [package]
-name = "agentz-zellij"
+name = "xs-tui-zellij"
 version = "0.1.0"
 edition = "2024"
 

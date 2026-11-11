@@ -1,5 +1,5 @@
-//! Compile le plugin zellij (`plugin/`) en wasm pour l'embarquer dans agz (SPEC.md § Plugin
-//! zellij), et publie l'empreinte de son contenu : agz l'écrit sous un nom qui en dépend, car
+//! Compile le plugin zellij (`plugin/`) en wasm pour l'embarquer dans xst (SPEC.md § Plugin
+//! zellij), et publie l'empreinte de son contenu : xst l'écrit sous un nom qui en dépend, car
 //! zellij garde en mémoire, par chemin, le code d'un plugin déjà chargé.
 
 use std::env;
@@ -17,16 +17,16 @@ fn main() {
         .args(["build", "--release", "--locked", "--target", "wasm32-wasip1", "--manifest-path", "plugin/Cargo.toml"])
         .arg("--target-dir")
         .arg(&target_dir);
-    // Réglages de la compilation d'agz (clippy, drapeaux de l'hôte) : pas pour le plugin.
+    // Réglages de la compilation d'xst (clippy, drapeaux de l'hôte) : pas pour le plugin.
     for var in ["RUSTC_WORKSPACE_WRAPPER", "RUSTC_WRAPPER", "CARGO_ENCODED_RUSTFLAGS", "RUSTFLAGS", "CARGO_TARGET_DIR"] {
         cargo.env_remove(var);
     }
     let status = cargo.status().expect("cargo pour le plugin");
     assert!(status.success(), "compilation du plugin zellij : `rustup target add wasm32-wasip1` ?");
-    let wasm = target_dir.join("wasm32-wasip1/release/agentz-zellij.wasm");
+    let wasm = target_dir.join("wasm32-wasip1/release/xs-tui-zellij.wasm");
     let bytes = std::fs::read(&wasm).expect("plugin wasm");
-    std::fs::write(out.join("agentz.wasm"), &bytes).expect("copie du plugin");
-    println!("cargo:rustc-env=AGENTZ_PLUGIN_HASH={:016x}", fnv1a(&bytes));
+    std::fs::write(out.join("xs-tui.wasm"), &bytes).expect("copie du plugin");
+    println!("cargo:rustc-env=XS_TUI_PLUGIN_HASH={:016x}", fnv1a(&bytes));
 }
 
 /// FNV-1a 64 bits : un nom de fichier par version du plugin, sans dépendance.

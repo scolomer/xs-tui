@@ -1,6 +1,6 @@
 //! Actions zellij : saut vers le pane d'une instance (`focus-pane-id`), reprise d'une session
-//! dormante dans un nouvel onglet (`new-tab`), sessions headless par le plugin agentz
-//! (`zellij pipe`, SPEC.md § Sessions headless) et nom de l'onglet d'agz.
+//! dormante dans un nouvel onglet (`new-tab`), sessions headless par le plugin xs-tui
+//! (`zellij pipe`, SPEC.md § Sessions headless) et nom de l'onglet d'xst.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -14,15 +14,15 @@ use serde::Deserialize;
 use crate::record::Zellij;
 use crate::watch::Event;
 
-/// Plugin zellij agentz (`plugin/`), compilé par `build.rs`.
-const PLUGIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agentz.wasm"));
+/// Plugin zellij xs-tui (`plugin/`), compilé par `build.rs`.
+const PLUGIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/xs-tui.wasm"));
 /// Au-delà, le plugin attend sans doute l'accord de ses permissions, demandé à son premier lancement.
 const PLUGIN_PATIENCE: Duration = Duration::from_secs(3);
 /// Fin de l'attente d'une réponse du plugin.
 const PLUGIN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Nom donné à l'onglet zellij d'agz.
-pub const TAB_NAME: &str = "agentz";
+/// Nom donné à l'onglet zellij d'xst.
+pub const TAB_NAME: &str = "xs-tui";
 
 /// Vrai si `focus` peut atteindre `target` depuis la session zellij `own`.
 pub fn reachable(own: Option<&str>, target: Option<&Zellij>) -> bool {
@@ -56,7 +56,7 @@ pub fn close(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
 /// comme `zellij-resume.sh` d'omp-sessions.
 pub fn resume(own: Option<&str>, id: &str, cwd: &Path) -> Result<(), String> {
     if own.is_none() {
-        return Err("agz hors zellij : reprise impossible".into());
+        return Err("xst hors zellij : reprise impossible".into());
     }
     run(Command::new("zellij").args(["action", "new-tab", "--cwd"]).arg(cwd).args(["--", "fish", "-C", &resume_script(id, cwd)]))
 }
@@ -70,7 +70,7 @@ fn resume_script(id: &str, cwd: &Path) -> String {
     format!("status job-control full; cd {}; and omp --resume {id}", fish_quote(cwd))
 }
 
-/// Commande du plugin agentz (`plugin/src/main.rs`).
+/// Commande du plugin xs-tui (`plugin/src/main.rs`).
 pub enum Headless<'a> {
     /// Reprend la session `id`, ouverte dans `cwd`, dans un pane headless.
     Resume { id: &'a str, cwd: &'a Path },
@@ -93,7 +93,7 @@ impl Headless<'_> {
     }
 }
 
-/// Plugin agentz installé, appelé par `zellij pipe` ; zellij le lance au premier appel.
+/// Plugin xs-tui installé, appelé par `zellij pipe` ; zellij le lance au premier appel.
 pub struct Plugin {
     url: String,
     /// Demandes au thread qui relit les panes headless.
@@ -106,14 +106,14 @@ impl Plugin {
     /// un nouveau nom fait charger la nouvelle version, au prix d'une nouvelle demande de
     /// permissions.
     pub fn install(dir: &Path, refresh: Sender<()>) -> std::io::Result<Plugin> {
-        let name = format!("agentz-{}.wasm", env!("AGENTZ_PLUGIN_HASH"));
+        let name = format!("xs-tui-{}.wasm", env!("XS_TUI_PLUGIN_HASH"));
         let path = dir.join(&name);
         if !path.exists() {
             std::fs::create_dir_all(dir)?;
             for entry in std::fs::read_dir(dir)?.flatten() {
                 let old = entry.file_name();
                 let old = old.to_string_lossy();
-                if old.starts_with("agentz-") && old.ends_with(".wasm") {
+                if old.starts_with("xs-tui-") && old.ends_with(".wasm") {
                     let _ = std::fs::remove_file(entry.path());
                 }
             }
@@ -132,7 +132,7 @@ impl Plugin {
         let refresh = self.refresh.clone();
         let tx = tx.clone();
         std::thread::Builder::new()
-            .name("agentz-plugin".into())
+            .name("xs-tui-plugin".into())
             .spawn(move || {
                 if let Err(message) = pipe(&url, &payload, &tx) {
                     let _ = tx.send(Event::Notice(message));
@@ -150,7 +150,7 @@ impl Plugin {
 /// Envoie `payload` au plugin et attend sa réponse, `ok` ou un message d'erreur.
 fn pipe(url: &str, payload: &str, tx: &Sender<Event>) -> Result<(), String> {
     let mut child = Command::new("zellij")
-        .args(["pipe", "--plugin", url, "--name", "agentz", "--", payload])
+        .args(["pipe", "--plugin", url, "--name", "xs-tui", "--", payload])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -166,14 +166,14 @@ fn pipe(url: &str, payload: &str, tx: &Sender<Event>) -> Result<(), String> {
         if !waiting_permissions && elapsed > PLUGIN_PATIENCE {
             waiting_permissions = true;
             reveal_plugin(url);
-            let _ = tx.send(Event::Notice("agentz attend ses permissions : y dans son pane pour accepter".into()));
+            let _ = tx.send(Event::Notice("xs-tui attend ses permissions : y dans son pane pour accepter".into()));
         }
         if elapsed > PLUGIN_TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
             // Le plugin garde la commande et l'exécute à l'accord de ses permissions, sans jamais
             // répondre au pipe qui l'attendait.
-            return if waiting_permissions { Ok(()) } else { Err("agentz : pas de réponse du plugin".into()) };
+            return if waiting_permissions { Ok(()) } else { Err("xs-tui : pas de réponse du plugin".into()) };
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -183,8 +183,8 @@ fn pipe(url: &str, payload: &str, tx: &Sender<Event>) -> Result<(), String> {
     }
     match reply.trim() {
         "ok" => Ok(()),
-        "" => Err("agentz : pas de réponse du plugin".into()),
-        other => Err(format!("agentz : {other}")),
+        "" => Err("xs-tui : pas de réponse du plugin".into()),
+        other => Err(format!("xs-tui : {other}")),
     }
 }
 

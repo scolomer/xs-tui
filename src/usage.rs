@@ -1,6 +1,6 @@
 //! Consommation des abonnements Anthropic et OpenAI (SPEC.md § Consommation), lue avec
 //! `omp usage --json` : omp garde ces rapports en cache et les tient à jour avec les en-têtes de
-//! réponse des modèles, agz n'a donc ni identifiants ni appel réseau à faire.
+//! réponse des modèles, xst n'a donc ni identifiants ni appel réseau à faire.
 //!
 //! Un thread relit la consommation au démarrage, après une fin de tour (au plus une fois par
 //! `MIN_GAP`), juste après le prochain reset d'une fenêtre, et toutes les `PERIOD` pour capter la

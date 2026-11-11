@@ -27,7 +27,7 @@ pub enum Event {
     Pane(u64, crate::mirror::Update),
     /// Consommation lue par `omp usage`, ou message d'erreur.
     Usage(Result<Vec<crate::usage::Account>, String>),
-    /// Message d'un thread pour la barre du bas (plugin agentz).
+    /// Message d'un thread pour la barre du bas (plugin xs-tui).
     Notice(String),
     /// Ids des panes headless de la session zellij courante.
     Headless(std::collections::HashSet<String>),

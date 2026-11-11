@@ -1,6 +1,6 @@
 /**
- * agentz publisher: writes each agent's run state to `~/.omp/run/agentz/<pid>/<agentId>.json`
- * so the agz dashboard can show it (SPEC.md § Extension omp).
+ * xs-tui publisher: writes each agent's run state to `~/.omp/run/xs-tui/<pid>/<agentId>.json`
+ * so the xst dashboard can show it (SPEC.md § Extension omp).
  *
  * The module is imported once per process and the factory is rebound for every subagent: module
  * variables are shared between the main session and its subagents, closure variables are per agent.
@@ -12,7 +12,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { reduce, type Tracker } from "./state";
 
-const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agentz");
+const RUN_DIR = path.join(os.homedir(), ".omp", "run", "xs-tui");
 const FORMAT_VERSION = 1;
 /** Polling period for what omp changes without an extension event: title and `/move` cwd. */
 const POLL_MS = 500;
@@ -22,8 +22,8 @@ let rootPublishes = false;
 
 const pidDir = path.join(RUN_DIR, String(process.pid));
 
-export default function agentz(pi: ExtensionAPI) {
-	pi.setLabel("agentz");
+export default function xsTui(pi: ExtensionAPI) {
+	pi.setLabel("xs-tui");
 
 	let enabled = false;
 	const tracker: Tracker = { state: "idle", blocking: new Set() };
@@ -73,7 +73,7 @@ export default function agentz(pi: ExtensionAPI) {
 			lastCwd = rec.cwd;
 		} catch (error) {
 			// Never fail omp over the dashboard; leave a trace in the omp log instead.
-			pi.logger.warn("agentz: publish failed", { file: target, error: String(error) });
+			pi.logger.warn("xs-tui: publish failed", { file: target, error: String(error) });
 		}
 	}
 
@@ -82,7 +82,7 @@ export default function agentz(pi: ExtensionAPI) {
 			if (ctx.agent.kind === "main") await fs.rm(pidDir, { recursive: true, force: true });
 			else if (file) await fs.rm(file, { force: true });
 		} catch (error) {
-			pi.logger.warn("agentz: cleanup failed", { dir: pidDir, error: String(error) });
+			pi.logger.warn("xs-tui: cleanup failed", { dir: pidDir, error: String(error) });
 		}
 		file = undefined;
 	}
@@ -94,7 +94,7 @@ export default function agentz(pi: ExtensionAPI) {
 		} else {
 			enabled = rootPublishes;
 		}
-		pi.logger.debug("agentz: session_start", {
+		pi.logger.debug("xs-tui: session_start", {
 			agent: ctx.agent.id,
 			kind: ctx.agent.kind,
 			mode: ctx.mode,

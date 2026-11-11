@@ -1,5 +1,5 @@
 /**
- * `mise run extension:check`: verifies that omp loads the installed agentz extension and that it
+ * `mise run extension:check`: verifies that omp loads the installed xs-tui extension and that it
  * publishes. Starts a throwaway interactive omp (`--no-session`) in a pseudo-terminal, since the
  * extension only publishes in `tui` mode, waits for its record, then exits it with `/exit` and
  * checks that the record directory is removed.
@@ -9,8 +9,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const EXTENSION_DIR = path.resolve(import.meta.dir, "..");
-const LINK = path.join(os.homedir(), ".omp", "agent", "extensions", "agentz");
-const RUN_DIR = path.join(os.homedir(), ".omp", "run", "agentz");
+const LINK = path.join(os.homedir(), ".omp", "agent", "extensions", "xs-tui");
+const RUN_DIR = path.join(os.homedir(), ".omp", "run", "xs-tui");
 const PUBLISH_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 20_000;
 
@@ -54,7 +54,7 @@ function checkLink() {
 }
 
 async function checkOmp() {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "agentz-check-"));
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "xs-tui-check-"));
 	let screen = "";
 	const decoder = new TextDecoder();
 	const omp = Bun.spawn(["omp", "--no-session"], {

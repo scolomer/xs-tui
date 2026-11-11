@@ -1,6 +1,6 @@
-//! Plugin zellij d'agz : panes headless (SPEC.md § Sessions headless).
+//! Plugin zellij d'xst : panes headless (SPEC.md § Sessions headless).
 //!
-//! agz l'appelle par `zellij pipe --plugin file:<wasm> --name agentz -- <commande>` ; la commande
+//! xst l'appelle par `zellij pipe --plugin file:<wasm> --name xs-tui -- <commande>` ; la commande
 //! tient sur des lignes : son nom, puis ses arguments. Le plugin répond `ok` ou un message
 //! d'erreur sur la sortie du pipe. Un pane headless est un pane « supprimé » de zellij : affiché
 //! dans aucun onglet, il reste rattaché à l'onglet de plus petit id et passe dans un autre quand
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use zellij_tile::prelude::*;
 
 /// Nom des messages de pipe traités.
-const PIPE_NAME: &str = "agentz";
+const PIPE_NAME: &str = "xs-tui";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -94,7 +94,7 @@ impl ZellijPlugin for State {
     }
 
     fn render(&mut self, _rows: usize, _cols: usize) {
-        println!("agentz : accorder les permissions pour les sessions headless d'agz.");
+        println!("xs-tui : accorder les permissions pour les sessions headless d'xst.");
     }
 }
 

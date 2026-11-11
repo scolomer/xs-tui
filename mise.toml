@@ -3,7 +3,7 @@ rust = { version = "latest", targets = "wasm32-wasip1" }
 bun = "latest"
 
 [tasks.build]
-description = "Compile agz (release) et vérifie l'extension agentz"
+description = "Compile xst (release) et vérifie l'extension xs-tui"
 run = [
   "cargo build --release",
   "bun install --cwd extension",
@@ -11,27 +11,27 @@ run = [
 ]
 
 [tasks.start]
-description = "Compile puis lance agz"
+description = "Compile puis lance xst"
 depends = ["build"]
-run = "./target/release/agz"
+run = "./target/release/xst"
 
 [tasks.install]
-description = "Installe agz dans ~/.cargo/bin et l'extension agentz dans omp"
+description = "Installe xst dans ~/.cargo/bin et l'extension xs-tui dans omp"
 depends = ["extension:install"]
 run = "cargo install --path . --locked"
 
 [tasks."extension:install"]
-description = "Installe l'extension agentz dans omp (lien ~/.omp/agent/extensions/agentz)"
+description = "Installe l'extension xs-tui dans omp (lien ~/.omp/agent/extensions/xs-tui)"
 run = [
   "bun install --cwd extension",
   "mkdir -p ~/.omp/agent/extensions",
-  "ln -sfn {{config_root}}/extension ~/.omp/agent/extensions/agentz",
+  "ln -sfn {{config_root}}/extension ~/.omp/agent/extensions/xs-tui",
 ]
 
 [tasks."extension:check"]
-description = "Vérifie que omp charge l'extension agentz installée et qu'elle publie"
+description = "Vérifie que omp charge l'extension xs-tui installée et qu'elle publie"
 run = "bun extension/scripts/check.ts"
 
 [tasks.test]
-description = "Tests Rust (agz et plugin zellij) et extension"
+description = "Tests Rust (xst et plugin zellij) et extension"
 run = ["cargo test", "cargo test --manifest-path plugin/Cargo.toml", "bun test --cwd extension"]

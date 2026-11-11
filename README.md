@@ -1,14 +1,14 @@
-# agz
+# xs-tui
 
 A terminal dashboard for [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) coding-agent
 sessions running in [zellij](https://zellij.dev).
 
-agz lists every interactive omp instance and its subagents in a live tree, shows what each one is
-doing, and lets you jump to its zellij pane, watch its screen, or resume a pinned session that is no
-longer running.
+xs-tui (command `xst`) lists every interactive omp instance and its subagents in a live tree,
+shows what each one is doing, and lets you jump to its zellij pane, watch its screen, or resume a
+pinned session that is no longer running.
 
 ```
-› ⠹  agent-tui  main *2       TUI: agent-tui
+› ⠹  xs-tui  main *2          TUI: xs-tui
   ●  stats2                   PUSH: List slow CEP push selections
     ├ Explore  task
     └ Review  task
@@ -24,7 +24,7 @@ longer running.
 - **Folder and git branch.** Each row shows the session's folder and branch, colored and counted
   like omp's own status line (`*` unstaged, `+` staged, `?` untracked).
 - **Jump to a session.** `Enter` focuses the instance's zellij pane.
-- **Pinned sessions.** Sessions pinned with omp's `/pin` or agz's `p` end with a grey pin and stay
+- **Pinned sessions.** Sessions pinned with omp's `/pin` or xst's `p` end with a grey pin and stay
   listed after omp exits (`○`); `Enter` resumes them in a new zellij tab.
 - **Session copy.** `d` splits the screen and shows a live, read-only copy of the selected
   session's screen under the list, exactly as omp draws it.
@@ -35,12 +35,12 @@ longer running.
 
 omp exposes its run state only on its own terminal, so the repository holds two parts:
 
-- **`extension/`**: the omp extension *agentz* (TypeScript, Bun). Loaded by every omp, it writes
-  each agent's state to `~/.omp/run/agentz/<pid>/<agentId>.json` whenever it changes.
-- **The `agz` binary** (Rust, [ratatui](https://ratatui.rs)). It watches those files, the omp
+- **`extension/`**: the omp extension *xs-tui* (TypeScript, Bun). Loaded by every omp, it writes
+  each agent's state to `~/.omp/run/xs-tui/<pid>/<agentId>.json` whenever it changes.
+- **The `xst` binary** (Rust, [ratatui](https://ratatui.rs)). It watches those files, the omp
   processes, the git repositories and `~/.omp/agent/session-pins.json`, and redraws on change.
   It writes only `session-pins.json`, on `p`, under the same lock as omp. Usage comes from
-  `omp usage --json`, which serves omp's own cache, so agz needs no credentials of its own.
+  `omp usage --json`, which serves omp's own cache, so xst needs no credentials of its own.
 
 Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three timed refreshes: the
 git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
@@ -52,7 +52,7 @@ refresh after each finished turn, to catch usage made outside omp.
 ## Requirements
 
 - macOS or Linux
-- [zellij](https://zellij.dev) 0.45 or later; agz also runs outside zellij, without pane jumps,
+- [zellij](https://zellij.dev) 0.45 or later; xst also runs outside zellij, without pane jumps,
   resume or session copy
 - [omp](https://github.com/can1357/oh-my-pi) with interactive (`tui`) sessions
 - [fish](https://fishshell.com), used to resume pinned sessions
@@ -65,8 +65,8 @@ refresh after each finished turn, to catch usage made outside omp.
 mise run install
 ```
 
-This installs `agz` into `~/.cargo/bin` and links the extension as
-`~/.omp/agent/extensions/agentz`. To install only the extension, run
+This installs `xst` into `~/.cargo/bin` and links the extension as
+`~/.omp/agent/extensions/xs-tui`. To install only the extension, run
 `mise run extension:install`. omp instances started before the link exist do not load the
 extension and do not appear until they restart.
 
@@ -76,7 +76,7 @@ and checks that the record is removed.
 
 ## Usage
 
-Run `agz` in a zellij pane. It renames its tab to `agentz`.
+Run `xst` in a zellij pane. It renames its tab to `xs-tui`.
 
 | Key | Action |
 |---|---|
@@ -94,5 +94,5 @@ Run `agz` in a zellij pane. It renames its tab to `agentz`.
 ```sh
 mise run build   # release build and extension typecheck
 mise run test    # Rust and extension tests
-mise run start   # build, then run ./target/release/agz
+mise run start   # build, then run ./target/release/xst
 ```

@@ -1,6 +1,7 @@
-# agz — spécification v1
+# xs-tui — spécification v1
 
-agz est une application TUI de pilotage de harness LLM, développée en Rust avec Ratatui.
+xs-tui (commande `xst`) est une application TUI de pilotage de harness LLM, développée en Rust avec
+Ratatui.
 La v1 affiche en temps réel les instances oh-my-pi (omp) en cours, avec leurs sous-agents, et
 permet d'aller au pane zellij d'une instance.
 
@@ -11,7 +12,7 @@ permet d'aller au pane zellij d'une instance.
 - Mise à jour dynamique : apparition, disparition et changement d'état des instances sans action de l'utilisateur.
 - Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
-  agz, au premier plan ou en arrière-plan.
+  xst, au premier plan ou en arrière-plan.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
 - Sessions headless : instances omp affichées dans aucun onglet zellij (touches `s` et `D`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
@@ -26,15 +27,15 @@ modes `json`/`rpc`).
 ```mermaid
 flowchart LR
   subgraph omp["process omp (bun), mode tui"]
-    M[extension · main] -->|écriture atomique| F1["~/.omp/run/agentz/&lt;pid&gt;/Main.json"]
+    M[extension · main] -->|écriture atomique| F1["~/.omp/run/xs-tui/&lt;pid&gt;/Main.json"]
     S[extension · sous-agents] -->|écriture atomique| F2["&lt;pid&gt;/&lt;agentId&gt;.json"]
   end
-  F1 & F2 -->|notify : FSEvents / inotify| T[agz]
+  F1 & F2 -->|notify : FSEvents / inotify| T[xst]
   K[kqueue NOTE_EXIT / pidfd] -->|mort du pid| T
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
   Z -.->|zellij action dump-screen, copie ouverte| T
-  T -->|zellij pipe : s, D, Entrée| P[plugin zellij agentz]
+  T -->|zellij pipe : s, D, Entrée| P[plugin zellij xs-tui]
   P -->|pane caché, ou sorti dans un onglet| Z
   Z -.->|zellij action list-panes : panes headless| T
   U["omp usage --json"] -->|fin de tour, reset, 15 min| T
@@ -42,22 +43,22 @@ flowchart LR
 
 omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, OSC 7501) : aucun
 fichier ni socket ne le rend lisible par un autre process. Une extension omp publie donc l'état de
-chaque agent dans un fichier JSON, et agz surveille ces fichiers.
+chaque agent dans un fichier JSON, et xst surveille ces fichiers.
 
 Le dépôt contient trois composants :
 
-- racine : le binaire Rust `agz` ;
-- `extension/` : l'extension omp agentz (paquet bun/TypeScript), installée par lien symbolique
-  `~/.omp/agent/extensions/agentz -> <dépôt>/extension`, comme omp-cron et omp-q ;
-- `plugin/` : le plugin zellij agentz (Rust, cible `wasm32-wasip1`), compilé par `build.rs` et
-  embarqué dans `agz` (voir « Sessions headless »).
+- racine : le binaire Rust `xst` ;
+- `extension/` : l'extension omp xs-tui (paquet bun/TypeScript), installée par lien symbolique
+  `~/.omp/agent/extensions/xs-tui -> <dépôt>/extension`, comme omp-cron et omp-q ;
+- `plugin/` : le plugin zellij xs-tui (Rust, cible `wasm32-wasip1`), compilé par `build.rs` et
+  embarqué dans `xst` (voir « Sessions headless »).
 
-`mise run install` installe `agz` dans `~/.cargo/bin` (`cargo install`) puis l'extension ;
+`mise run install` installe `xst` dans `~/.cargo/bin` (`cargo install`) puis l'extension ;
 `mise run extension:install` installe seulement l'extension (`bun install` et création ou mise à
 jour de ce lien). `mise run extension:check` vérifie que ce lien vise bien `extension/` de ce
 dépôt, puis lance un omp jetable (`omp --no-session`, dans un pseudo-terminal et un dossier
 temporaire), attend son fichier publié et vérifie qu'il disparaît après `/exit`. La compilation
-d'agz demande la cible `wasm32-wasip1`, déclarée dans `mise.toml`.
+d'xst demande la cible `wasm32-wasip1`, déclarée dans `mise.toml`.
 
 Le format du fichier évolue dans le même commit côté producteur et côté consommateur.
 
@@ -74,7 +75,7 @@ Dans tout autre mode (`print`, `json`, `rpc`), elle ne publie rien.
 
 ### Fichiers
 
-Un fichier par agent : `~/.omp/run/agentz/<pid>/<agentId>.json`.
+Un fichier par agent : `~/.omp/run/xs-tui/<pid>/<agentId>.json`.
 
 Chaque liaison de l'extension (main ou sous-agent) n'écrit que son propre fichier : aucun état
 partagé entre sessions, aucune écriture concurrente sur un même fichier.
@@ -92,8 +93,8 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
   "pid": 8215,
   "agent": { "kind": "main", "id": "Main", "name": "main", "depth": 0, "parentId": null },
   "sessionId": "01a18d4a-c0c9-761c-adb9-6c723f16d552",
-  "cwd": "/Users/sylvaincolomer/Projects/perso/agent-tui",
-  "title": "SPEC: Grill agent-tui SPEC design",
+  "cwd": "/Users/sylvaincolomer/Projects/perso/xs-tui",
+  "title": "SPEC: Grill xs-tui SPEC design",
   "state": "working",
   "zellij": { "session": "m1", "paneId": "8" },
   "startedAt": "2026-10-30T14:50:48.905Z",
@@ -114,7 +115,7 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
 | `startedAt` | Démarrage de l'agent ; sert à l'ordre d'affichage. |
 | `updatedAt` | Dernière écriture du fichier. |
 
-La branche git n'est pas publiée : agz la lit lui-même.
+La branche git n'est pas publiée : xst la lit lui-même.
 
 ### Calcul de l'état
 
@@ -151,31 +152,31 @@ Sur `session_switch` (reprise d'une autre session dans le même process), l'exte
   travail en cours.
 - Une session main supprime le dossier `<pid>/` entier à sa fermeture (`session_shutdown`) et à la
   sortie du process.
-- Après un crash ou un `kill -9`, le dossier reste ; agz le supprime (voir « Vivacité »).
+- Après un crash ou un `kill -9`, le dossier reste ; xst le supprime (voir « Vivacité »).
 
-## agz
+## xst
 
 ### Découverte
 
 Les fichiers de l'extension sont la seule source : une instance existe si et seulement si le
-dossier `~/.omp/run/agentz/<pid>/` contient son fichier et que le pid est vivant. Un omp qui ne
+dossier `~/.omp/run/xs-tui/<pid>/` contient son fichier et que le pid est vivant. Un omp qui ne
 charge pas l'extension, par exemple lancé avant son installation, n'apparaît pas.
 
-agz surveille `~/.omp/run/agentz/` récursivement (crate `notify` : FSEvents sur macOS,
+xst surveille `~/.omp/run/xs-tui/` récursivement (crate `notify` : FSEvents sur macOS,
 inotify sur Linux), relit les fichiers modifiés et reconstruit l'arbre via `agent.parentId`.
-agz peut démarrer avant ou après les instances omp.
+xst peut démarrer avant ou après les instances omp.
 
 ### Vivacité
 
-- À la découverte d'un pid, agz vérifie que le process est bien un process bun, pour écarter
+- À la découverte d'un pid, xst vérifie que le process est bien un process bun, pour écarter
   un pid réutilisé (libproc sur macOS, `/proc/<pid>` sur Linux).
-- agz s'abonne ensuite à la sortie du pid, sans sondage : kqueue `EVFILT_PROC`/`NOTE_EXIT`
+- xst s'abonne ensuite à la sortie du pid, sans sondage : kqueue `EVFILT_PROC`/`NOTE_EXIT`
   sur macOS, `pidfd_open` + epoll sur Linux.
-- À la mort d'un pid, agz retire ses lignes et supprime le dossier `<pid>/`.
+- À la mort d'un pid, xst retire ses lignes et supprime le dossier `<pid>/`.
 
 ### Branche git
 
-agz résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
+xst résout le dépôt depuis le `cwd` avec gix (sans lancer git) et surveille les fichiers HEAD
 et index, y compris ceux d'un worktree, pour suivre les changements de branche et de statut. Le
 code de lecture de HEAD est recopié de `head_label` d'omp-sessions. Le statut (compteurs) est
 recalculé à chaque changement de HEAD ou d'index et toutes les 10 s, comme dans la barre d'état
@@ -203,11 +204,11 @@ de l'instance : `⚠ pid 8215 : format v2 non supporté`. L'instance reste visib
 
 La source est le `/pin` d'omp, qui bascule l'épingle de la session courante (`/pin <id>` pour une
 autre session) et range les ids épinglés dans `~/.omp/agent/session-pins.json` (tableau JSON, ordre
-d'épinglage). agz surveille ce fichier sans sondage. Il l'écrit seulement quand on appuie sur `p`,
+d'épinglage). xst surveille ce fichier sans sondage. Il l'écrit seulement quand on appuie sur `p`,
 avec le même protocole qu'omp (`session-pins.ts`) :
 
 - verrou exclusif `flock` sur `session-pins.json.lock` ; omp utilise le même sur macOS, deux
-  écritures simultanées sont donc sérialisées. agz réessaie 20 fois à 50 ms d'intervalle, puis
+  écritures simultanées sont donc sérialisées. xst réessaie 20 fois à 50 ms d'intervalle, puis
   affiche « Épingles verrouillées par un autre omp : réessayer » ;
 - relecture du fichier sous le verrou, ajout de l'id en fin de liste ou retrait ;
 - écriture dans `session-pins.json.<pid>.<n>.tmp` (mode 0600, indentation par tabulation comme
@@ -224,7 +225,7 @@ lirait comme vide, et toutes les épingles seraient perdues.
   compteurs git sont calculés depuis ce `cwd` comme pour une instance.
 - Une épingle dont le fichier de session n'existe plus est ignorée.
 
-Avant de reprendre une session dormante, agz vérifie qu'elle n'est pas déjà ouverte : elle
+Avant de reprendre une session dormante, xst vérifie qu'elle n'est pas déjà ouverte : elle
 l'est si son bail de propriété `~/.omp/run/session-owners/<id>.lock` est verrouillé (`flock`
 exclusif non bloquant, relâché aussitôt ; omp le tient jusqu'à sa mort) ou si une instance publie
 son `sessionId`.
@@ -304,7 +305,7 @@ des instances.
 
 ### Instances hors de portée
 
-Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'agz, ou hors
+Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'xst, ou hors
 zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
 
 ### Liste vide
@@ -334,7 +335,7 @@ curseur.
   une instance apparaît), « zellij introuvable », « Copie interrompue : <raison> » (pane fermé,
   erreur de zellij). Après un échec, la copie ne relit plus l'écran jusqu'au prochain changement
   de ligne ou à une réouverture.
-- La copie n'est pas mémorisée : agz démarre avec la liste seule.
+- La copie n'est pas mémorisée : xst démarre avec la liste seule.
 
 ### Consommation
 
@@ -348,9 +349,9 @@ Anthropic
 7 j Fable  ░░░░░░░░░░   4 %  1j14h
 ```
 
-- Source : `omp usage --json --no-extensions`, dont agz ne garde que les rapports `anthropic` et
+- Source : `omp usage --json --no-extensions`, dont xst ne garde que les rapports `anthropic` et
   `openai-codex`. omp met ces rapports en cache 5 min et les tient à jour avec les en-têtes de
-  réponse des modèles : agz n'a pas d'identifiants. Cette commande ne crée pas de session. Elle
+  réponse des modèles : xst n'a pas d'identifiants. Cette commande ne crée pas de session. Elle
   est lancée avec `OMP_LOG_LEVEL=error` : sinon chaque appel laisserait un journal
   `~/.omp/logs/omp.<jour>.<pid>.log`, que omp garde 5 jours. Quand le cache a expiré, omp
   interroge le fournisseur ; s'il refuse (429), omp renvoie le dernier rapport connu.
@@ -385,7 +386,7 @@ Anthropic
 |---|---|
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous). |
-| `s` | Reprendre la session dormante en headless, sans quitter agz (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
+| `s` | Reprendre la session dormante en headless, sans quitter xst (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
 | `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
@@ -395,7 +396,7 @@ Anthropic
 | `q`, `Ctrl-C` | Quitter. |
 
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
-  (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'agz tourne.
+  (`▸ 3`). L'état de pliage est mémorisé par racine tant qu'xst tourne.
 - Le curseur suit l'élément sélectionné (clé `pid` + `agent.id` pour une instance, id de session
   pour une session dormante) quand la liste change. Quand une session change de forme (session
   dormante reprise par Entrée ou `s`, session épinglée fermée), le curseur la suit jusqu'à sa
@@ -405,16 +406,16 @@ Anthropic
 - Entrée sur une session dormante, comme le script `zellij-resume.sh` d'omp-sessions :
   - déjà ouverte (voir « Sessions épinglées ») : « Session déjà ouverte par un autre omp », aucune
     autre action ;
-  - agz hors zellij : « agz hors zellij : reprise impossible » ;
-  - sinon : nouvel onglet dans la session zellij d'agz, ouvert dans le `cwd` de la session
+  - xst hors zellij : « xst hors zellij : reprise impossible » ;
+  - sinon : nouvel onglet dans la session zellij d'xst, ouvert dans le `cwd` de la session
     (`$HOME` s'il n'existe plus) :
     `zellij action new-tab --cwd <cwd> -- fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`.
     fish reste ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne
     redevient une instance. `status job-control full` donne à omp son propre groupe de processus :
     sans lui (fish désactive le contrôle des tâches pour `-C`), le Ctrl+Z d'omp gèlerait aussi
     fish, et fermer le pane laisserait omp arrêté sans jamais le réveiller.
-- agz reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
-- `x` sur une instance de la session zellij d'agz affiche « Fermer “<titre>” ? x pour confirmer »
+- xst reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
+- `x` sur une instance de la session zellij d'xst affiche « Fermer “<titre>” ? x pour confirmer »
   (« cette session » sans titre). Un second `x` dans les 3 s ferme le pane avec `zellij action
   close-pane --pane-id terminal_<paneId>` ; toute autre touche, ou 3 s d'attente, annule. zellij
   envoie alors `SIGHUP` à omp, qui fait sa fermeture normale (session sauvegardée, dossier publié
@@ -424,7 +425,7 @@ Anthropic
 - Une session épinglée sans fichier de session (aucune réponse du modèle : omp ne l'écrit qu'à la
   première) ne peut pas devenir dormante, il n'y a rien à reprendre. Le premier `x` l'annonce à la
   place de la question : « “<titre>” est vide : son épingle sera perdue. x pour fermer ».
-- Au démarrage dans zellij, agz renomme son onglet en `agentz` (`zellij action
+- Au démarrage dans zellij, xst renomme son onglet en `xs-tui` (`zellij action
   rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
   en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.
 
@@ -432,23 +433,23 @@ Anthropic
 
 Une session headless est une instance omp dont le pane zellij est « supprimé » : affiché dans aucun
 onglet, il garde son process, sa taille et son écran. zellij ne réserve ces panes qu'aux plugins :
-agz embarque le plugin zellij agentz (`plugin/`) et l'appelle par
-`zellij pipe --plugin file:<wasm> --name agentz -- <commande>`, dans un thread.
+xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
+`zellij pipe --plugin file:<wasm> --name xs-tui -- <commande>`, dans un thread.
 
-- Plugin : compilé en `wasm32-wasip1` par `build.rs` et embarqué dans agz, qui l'écrit au
-  démarrage, dans zellij, sous `~/.cache/agz/agentz-<empreinte>.wasm` en supprimant les versions
+- Plugin : compilé en `wasm32-wasip1` par `build.rs` et embarqué dans xst, qui l'écrit au
+  démarrage, dans zellij, sous `~/.cache/xst/xs-tui-<empreinte>.wasm` en supprimant les versions
   précédentes. zellij garde en mémoire le code d'un plugin par chemin : une nouvelle version
   change de nom pour être chargée, au prix d'une nouvelle demande de permissions.
-- Premier appel : zellij lance le plugin dans l'onglet actif, celui d'agz, en pane flottant qui
+- Premier appel : zellij lance le plugin dans l'onglet actif, celui d'xst, en pane flottant qui
   demande ses permissions (lire et changer l'état de l'application, lancer des commandes, lire les
   pipes). Ce pane reste caché si la couche flottante de l'onglet l'est : sans réponse au bout de
-  3 s, agz l'affiche (`show-floating-panes --tab-id`, `focus-pane-id plugin_<id>`, le pane étant
-  retrouvé par son `plugin_url`) et annonce « agentz attend ses permissions : y dans son pane pour
+  3 s, xst l'affiche (`show-floating-panes --tab-id`, `focus-pane-id plugin_<id>`, le pane étant
+  retrouvé par son `plugin_url`) et annonce « xs-tui attend ses permissions : y dans son pane pour
   accepter ». Une fois les permissions accordées, le plugin se cache et exécute la commande en
-  attente, sans jamais répondre au pipe qui l'attendait : agz cesse de l'attendre après 120 s.
+  attente, sans jamais répondre au pipe qui l'attendait : xst cesse de l'attendre après 120 s.
   zellij mémorise l'accord (`permissions.kdl`).
 - Commandes, une ligne par élément : le nom puis les arguments. Le plugin répond `ok` ou un
-  message d'erreur, affiché dans la barre (« agentz : <message> ») :
+  message d'erreur, affiché dans la barre (« xs-tui : <message> ») :
   - `spawn <cwd> <programme> <arguments…>` : `open_command_pane_background`, puis
     `break_panes_to_new_tab` sans focus et `hide_pane_with_id`. Un pane ouvert en arrière-plan a une
     taille par défaut (92×28) ; passé par un onglet, il prend celle de la session et la garde une
@@ -458,32 +459,32 @@ agz embarque le plugin zellij agentz (`plugin/`) et l'appelle par
     ferme.
 - Un pane caché est rattaché à l'onglet de plus petit id de la session ; quand cet onglet se
   ferme, il passe dans un autre, sans mourir. Il meurt avec la session zellij.
-- État headless : agz lit les panes de terminal `is_suppressed` de
+- État headless : xst lit les panes de terminal `is_suppressed` de
   `zellij action list-panes --tab --state --json`, dans un thread, au démarrage, à chaque
   relecture des fichiers publiés, et 200 ms puis 1 s après chaque commande du plugin. Seules les
-  instances de la session zellij d'agz peuvent être headless pour agz.
+  instances de la session zellij d'xst peuvent être headless pour xst.
 - `s` sur une session dormante : mêmes vérifications qu'Entrée (« Session déjà ouverte par un
   autre omp »), puis `spawn` de `fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`
   et « “<titre>” reprise en arrière-plan » (« Session reprise en arrière-plan » sans titre). Une
   fois omp relancé, la ligne remonte parmi les instances, avec son état et sa copie `d`. Sur une
   instance headless : « Session déjà en arrière-plan » ; sur une autre instance : « Session déjà
   ouverte : D pour la passer en arrière-plan ».
-- `D` sur une instance de la session zellij d'agz : `hide`, et « “<titre>” passée en
+- `D` sur une instance de la session zellij d'xst : `hide`, et « “<titre>” passée en
   arrière-plan ». Déjà headless : « Session déjà en arrière-plan » ; session dormante : « Session
   dormante : s pour la reprendre en arrière-plan » ; instance hors de portée : même message
   qu'Entrée.
 - Entrée sur une instance headless : `show` ; le pane passe dans un nouvel onglet, qui prend le
   focus.
 - `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`).
-- agz hors zellij : « agz hors zellij : arrière-plan impossible » pour `s` et `D`.
+- xst hors zellij : « xst hors zellij : arrière-plan impossible » pour `s` et `D`.
 
 ## Risques connus
 
 - Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
-  `p` dans agz simultané à un `/pin` dans omp peut perdre l'une des deux modifications.
+  `p` dans xst simultané à un `/pin` dans omp peut perdre l'une des deux modifications.
 - L'extension recopie la logique d'état d'omp (`event-controller.ts`) faute de hook exposant
   directement son `RunStatus`. Un changement dans omp peut faire diverger l'état affiché sans erreur.
-- L'état (publié par l'extension) et la branche (lue par agz) viennent de deux sources
+- L'état (publié par l'extension) et la branche (lue par xst) viennent de deux sources
   distinctes.
 - Un `/rename`, un `/move` ou un `/wt` fait au repos apparaît avec au plus 500 ms de retard.
 - La copie de session est relue toutes les 250 ms : un écran qui change entre deux lectures n'y

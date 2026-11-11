@@ -1,5 +1,5 @@
 //! Sessions épinglées : `~/.omp/agent/session-pins.json` et en-têtes des fichiers de session
-//! (SPEC.md § Sessions épinglées). agz les épingle avec `p` en suivant le protocole d'écriture
+//! (SPEC.md § Sessions épinglées). xst les épingle avec `p` en suivant le protocole d'écriture
 //! d'omp (`session-pins.ts`) : verrou exclusif sur `session-pins.json.lock`, puis fichier
 //! temporaire renommé.
 
@@ -89,7 +89,7 @@ fn read_header(path: &Path) -> Option<(PathBuf, String)> {
     None
 }
 
-/// Tentatives de prise du verrou des épingles, comme omp (`withFileLock`) mais plus courtes : agz
+/// Tentatives de prise du verrou des épingles, comme omp (`withFileLock`) mais plus courtes : xst
 /// attend sur le thread de l'interface, et omp ne tient le verrou que le temps d'une écriture.
 const LOCK_RETRIES: u32 = 20;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
@@ -175,7 +175,7 @@ mod tests {
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("agz-pins-{}-{name}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("xst-pins-{}-{name}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
