@@ -4,6 +4,7 @@
 //! ce binaire surveille ces fichiers, la vie des pids et les HEAD git, et redessine à chaque
 //! changement (voir SPEC.md).
 
+mod filter;
 mod git;
 mod mirror;
 mod model;
@@ -191,9 +192,14 @@ impl App {
                     Event::Paste(text) => {
                         if let Some(prompt) = &mut self.prompt {
                             prompt.paste(&text);
+                        } else if self.model.filtering {
+                            // Le filtre tient sur une ligne.
+                            self.model.filter.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+                            self.refilter();
                         }
                     }
                     Event::Key(key) if self.prompt.is_some() => self.prompt_key(key),
+                    Event::Key(key) if self.model.filtering => self.filter_key(key),
                     Event::Key(key) => {
                         if !self.key(key) {
                             return Ok(());
@@ -245,6 +251,26 @@ impl App {
         let after = model::rows(&self.model);
         model::select_after_rebuild(&mut self.model, &self.rows, &after);
         self.rows = after;
+    }
+
+    /// Reconstruit la liste après un changement de la requête du filtre : comme dans fzf, le curseur
+    /// passe à la première ligne, la plus pertinente.
+    fn refilter(&mut self) {
+        let after = model::rows(&self.model);
+        self.model.selected = after.first().map(|r| r.key.clone());
+        model::select_after_rebuild(&mut self.model, &self.rows, &after);
+        self.rows = after;
+    }
+
+    /// Monte ou descend le curseur d'une ligne.
+    fn step(&mut self, down: bool) {
+        let Some(i) = self.model.selected.as_ref().and_then(|k| self.rows.iter().position(|r| &r.key == k)) else {
+            return;
+        };
+        let next = if down { i.checked_add(1) } else { i.checked_sub(1) };
+        if let Some(row) = next.and_then(|n| self.rows.get(n)) {
+            self.model.selected = Some(row.key.clone());
+        }
     }
 
     /// Relit le dossier d'exécution : une instance existe si son fichier est là et son pid vivant.
@@ -406,18 +432,16 @@ impl App {
                     self.close_pending = Some((root_key, Instant::now()));
                 }
             }
+            KeyCode::Char('f') => {
+                self.model.filtering = true;
+                self.model.message = None;
+            }
+            // Le filtre d'abord : la copie reste ouverte sur la session trouvée.
+            KeyCode::Esc if !self.model.filter.is_empty() => self.model.filter.clear(),
             KeyCode::Esc => self.mirror = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(i) = index.filter(|&i| i > 0) {
-                    self.model.selected = Some(self.rows[i - 1].key.clone());
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(row) = index.and_then(|i| self.rows.get(i + 1)) {
-                    self.model.selected = Some(row.key.clone());
-                }
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.step(false),
+            KeyCode::Down | KeyCode::Char('j') => self.step(true),
             KeyCode::Char(' ') => {
                 if let Some(row) = index.map(|i| &self.rows[i]).filter(|r| r.kind == RowKind::Root) {
                     let key = row.key.clone();
@@ -508,6 +532,45 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Touche pendant la saisie du filtre : la liste suit chaque caractère, les flèches déplacent le
+    /// curseur dans la liste filtrée.
+    fn filter_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let filter = &mut self.model.filter;
+        match key.code {
+            // Le curseur reste sur sa ligne, que la liste complète contient : la boucle la reconstruit.
+            KeyCode::Esc => {
+                filter.clear();
+                self.model.filtering = false;
+                return;
+            }
+            KeyCode::Char('c') if ctrl => {
+                filter.clear();
+                self.model.filtering = false;
+                return;
+            }
+            // Garde le filtre et rend la main aux commandes, qui portent sur la liste filtrée.
+            KeyCode::Enter => {
+                if filter.trim().is_empty() {
+                    filter.clear();
+                }
+                self.model.filtering = false;
+                return;
+            }
+            KeyCode::Up => return self.step(false),
+            KeyCode::Char('p' | 'k') if ctrl => return self.step(false),
+            KeyCode::Down => return self.step(true),
+            KeyCode::Char('n' | 'j') if ctrl => return self.step(true),
+            KeyCode::Backspace => {
+                filter.pop();
+            }
+            KeyCode::Char('u') if ctrl => filter.clear(),
+            KeyCode::Char(c) if !ctrl => filter.push(c),
+            _ => return,
+        }
+        self.refilter();
     }
 
     /// Touche pendant la saisie d'un prompt : les autres commandes attendent sa fin.

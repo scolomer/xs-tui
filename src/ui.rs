@@ -1,6 +1,7 @@
 //! Rendu : arbre des instances, jauges de consommation, copie de session et barre du bas
 //! (SPEC.md § Affichage).
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -10,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
+use crate::filter::Query;
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
 use crate::prompt::Prompt;
@@ -19,8 +21,9 @@ use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const HELP: &str =
-    "↑↓/jk naviguer  ⏎ aller au pane  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
+    "↑↓/jk naviguer  ⏎ aller au pane  f filtrer  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
 const EMPTY: &str = "Aucune instance omp";
+const NO_MATCH: &str = "Aucune session ne correspond au filtre";
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;
 /// Colonnes entre la ligne la plus large de la liste et les jauges.
@@ -36,25 +39,24 @@ pub fn draw(
     prompt: Option<&Prompt>,
 ) {
     let area = frame.area();
-    let (list_area, copy, bar_area) = match mirror {
-        None => {
-            let [list_area, bar_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-            (list_area, None, bar_area)
-        }
+    let [top, bar_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+    // La ligne du filtre, en saisie ou gardé, suit la dernière ligne de la liste.
+    let filter_line = u16::from(m.filtering || !m.filter.trim().is_empty());
+    let (list_area, copy) = match mirror {
+        None => (top, None),
         Some(mirror) => {
             // La liste prend la hauteur de ses lignes, au plus un tiers de l'écran ; elle défile au-delà.
             // Une ligne vide la sépare du trait.
             let cap = usize::from((area.height.saturating_sub(1) / 3).max(1));
-            let height = rows.len().clamp(1, cap) as u16;
-            let [list_area, _, separator_area, copy_area, bar_area] = Layout::vertical([
+            let height = rows.len().clamp(1, cap) as u16 + filter_line;
+            let [list_area, _, separator_area, copy_area] = Layout::vertical([
                 Constraint::Length(height),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(0),
-                Constraint::Length(1),
             ])
-            .areas(area);
-            (list_area, Some((mirror, separator_area, copy_area)), bar_area)
+            .areas(top);
+            (list_area, Some((mirror, separator_area, copy_area)))
         }
     };
 
@@ -68,16 +70,27 @@ pub fn draw(
             _ => None,
         })
         // La largeur du segment ne dépend pas de son style.
-        .map(|cwd| width(&location(m, cwd, Folder::Live)))
+        .map(|cwd| width(&location(m, cwd, Folder::Live, None)))
         .max()
         .unwrap_or(0);
-    let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, own_zellij, title_col)).collect();
+    let query = Query::new(&m.filter);
+    let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, own_zellij, title_col, query.as_ref())).collect();
     // `› ` devant chaque ligne.
-    let list_width = lines.iter().map(|l| l.width() + 2).max().unwrap_or(EMPTY.chars().count());
+    let empty = if m.filter.trim().is_empty() { EMPTY } else { NO_MATCH };
+    let list_width = lines.iter().map(|l| l.width() + 2).max().unwrap_or(empty.chars().count());
     let (list_area, usage_hidden) = draw_usage(frame, m, list_area, list_width);
+    let list_area = if filter_line == 0 {
+        list_area
+    } else {
+        let height = (rows.len().max(1) as u16).min(list_area.height.saturating_sub(1));
+        let [list_area, filter_area, _] =
+            Layout::vertical([Constraint::Length(height), Constraint::Length(1), Constraint::Min(0)]).areas(list_area);
+        draw_input(frame, "Filtre › ".to_string(), &m.filter, filter_area, m.filtering);
+        list_area
+    };
 
     if rows.is_empty() {
-        centered(frame, EMPTY, list_area);
+        centered(frame, empty, list_area);
     } else {
         list.select(m.selected.as_ref().and_then(|key| rows.iter().position(|r| &r.key == key)));
         let widget = List::new(lines.into_iter().map(ListItem::new))
@@ -89,9 +102,12 @@ pub fn draw(
     if let Some((mirror, separator_area, copy_area)) = copy {
         draw_copy(frame, m, rows, mirror, separator_area, copy_area);
     }
-    match prompt {
-        Some(prompt) => draw_prompt(frame, prompt, bar_area),
-        None => draw_bar(frame, m, rows, bar_area, usage_hidden),
+    if let Some(prompt) = prompt {
+        let head =
+            if prompt.title.is_empty() { "Prompt › ".to_string() } else { format!("Prompt → “{}” › ", prompt.title) };
+        draw_input(frame, head, &prompt.text, bar_area, true);
+    } else {
+        draw_bar(frame, m, rows, bar_area, usage_hidden);
     }
 }
 
@@ -234,21 +250,23 @@ fn indicator(state: State, tick: usize) -> Span<'static> {
     }
 }
 
-fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize) -> Line<'a> {
+fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize, query: Option<&Query>) -> Line<'a> {
     let pid = row.key.0;
     if row.kind == RowKind::Dormant {
         let Some(p) = m.dormant(&row.key) else { return Line::default() };
         let mut spans = vec![Span::styled("○", Color::DarkGray), Span::raw(" ")];
-        spans.extend(location(m, &p.cwd, Folder::Dormant));
+        spans.extend(location(m, &p.cwd, Folder::Dormant, query));
         let pad = (title_col + 1).saturating_sub(width(&spans[2..]));
         spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::raw(p.title.as_str()));
+        spans.extend(marked(p.title.as_str().into(), Style::new(), query));
         spans.push(pin());
         return Line::from(spans);
     }
     let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) else {
         let message = m.errors.get(&pid).map_or("", String::as_str);
-        return Line::from(vec![Span::styled("⚠ ", Color::Red), Span::raw(format!("pid {pid} : {message}"))]);
+        let mut spans = vec![Span::styled("⚠ ", Color::Red)];
+        spans.extend(marked(format!("pid {pid} : {message}").into(), Style::new(), query));
+        return Line::from(spans);
     };
     let root = m.instances.get(&(pid, ROOT_ID.to_string())).unwrap_or(rec);
     let dim = !zellij::reachable(own_zellij, root.zellij.as_ref());
@@ -268,14 +286,14 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     };
     if show_location {
         let style = if m.is_headless(own_zellij, root.zellij.as_ref()) { Folder::Headless } else { Folder::Live };
-        after = location(m, &rec.cwd, style);
+        after = location(m, &rec.cwd, style, query);
     }
     match row.kind {
         RowKind::Root => {
             // Un espace de plus que la plus large branche, pour bien séparer le titre.
             let pad = (title_col + 1).saturating_sub(width(&after));
             after.push(Span::raw(" ".repeat(pad)));
-            after.push(Span::raw(rec.title.as_str()));
+            after.extend(marked(rec.title.as_str().into(), Style::new(), query));
             if row.hidden_children > 0 {
                 after.push(Span::raw(format!(" ▸ {}", row.hidden_children)).dim());
             }
@@ -284,9 +302,9 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
             }
         }
         _ => {
-            after.push(Span::raw(rec.agent.id.as_str()));
+            after.extend(marked(rec.agent.id.as_str().into(), Style::new(), query));
             after.push(Span::raw(" "));
-            after.push(Span::styled(rec.agent.name.as_str(), Color::DarkGray));
+            after.extend(marked(rec.agent.name.as_str().into(), Style::new().fg(Color::DarkGray), query));
         }
     }
 
@@ -305,6 +323,26 @@ fn pin() -> Span<'static> {
     Span::styled(" \u{f0403}", Color::DarkGray)
 }
 
+/// `text` dans `style`, les lettres trouvées par le filtre en gras souligné : la couleur reste, le
+/// surlignage se voit aussi sur le fond du segment dossier.
+fn marked<'a>(text: Cow<'a, str>, style: Style, query: Option<&Query>) -> Vec<Span<'a>> {
+    let hits = query.map(|q| q.highlight(&text)).filter(|hits| hits.contains(&true));
+    let Some(hits) = hits else { return vec![Span::styled(text, style)] };
+    let hit_style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_hit = false;
+    for (c, hit) in text.chars().zip(hits) {
+        if hit != run_hit && !run.is_empty() {
+            spans.push(Span::styled(std::mem::take(&mut run), if run_hit { hit_style } else { style }));
+        }
+        run_hit = hit;
+        run.push(c);
+    }
+    spans.push(Span::styled(run, if run_hit { hit_style } else { style }));
+    spans
+}
+
 /// Style du segment dossier : fond bleu pour une instance, gris foncé pour une instance headless,
 /// aucun fond pour une session dormante (dossier gris, espace à la place de la flèche).
 #[derive(Clone, Copy)]
@@ -316,31 +354,25 @@ enum Folder {
 
 /// Segment powerline du dossier, puis branche git s'il y en a une, comme le segment git d'omp :
 /// branche verte si le dépôt est propre, jaune sinon, suivie des compteurs `*modifiés`,
-/// `+indexés` et `?non suivis` non nuls. La largeur ne dépend pas de `style`.
-fn location<'a>(m: &'a Model, cwd: &Path, style: Folder) -> Vec<Span<'a>> {
-    // À la racine d'un worktree lié, le nom du dépôt principal : la branche suit déjà.
-    let folder = match m.repo(cwd).and_then(|r| r.alias.as_ref()) {
-        Some((root, main)) if root == cwd => main.clone(),
-        _ => folder_name(cwd),
+/// `+indexés` et `?non suivis` non nuls. La largeur ne dépend ni de `style` ni de `query`.
+fn location<'a>(m: &'a Model, cwd: &Path, style: Folder, query: Option<&Query>) -> Vec<Span<'a>> {
+    let (segment, arrow) = match style {
+        Folder::Live => (Style::new().bg(Color::Blue).fg(Color::Black), Span::styled("\u{e0b0}", Color::Blue)),
+        Folder::Headless => {
+            (Style::new().bg(Color::DarkGray).fg(Color::Black), Span::styled("\u{e0b0}", Color::DarkGray))
+        }
+        Folder::Dormant => (Style::new().fg(Color::DarkGray), Span::raw(" ")),
     };
-    let segment = format!(" \u{f115} {folder} ");
-    let mut out = match style {
-        Folder::Live => vec![
-            Span::styled(segment, Style::new().bg(Color::Blue).fg(Color::Black)),
-            Span::styled("\u{e0b0}", Color::Blue),
-        ],
-        Folder::Headless => vec![
-            Span::styled(segment, Style::new().bg(Color::DarkGray).fg(Color::Black)),
-            Span::styled("\u{e0b0}", Color::DarkGray),
-        ],
-        Folder::Dormant => vec![Span::styled(segment, Color::DarkGray), Span::raw(" ")],
-    };
-    out.push(Span::raw(" "));
+    let mut out = vec![Span::styled(" \u{f115} ", segment)];
+    out.extend(marked(m.folder_label(cwd).into(), segment, query));
+    out.extend([Span::styled(" ", segment), arrow, Span::raw(" ")]);
     if let Some(repo) = m.repo(cwd)
         && let Some(branch) = &repo.label
     {
         let c = repo.counts;
-        out.push(Span::styled(format!("\u{f126} {branch}"), if c.dirty() { Color::Yellow } else { Color::Green }));
+        let color = Style::new().fg(if c.dirty() { Color::Yellow } else { Color::Green });
+        out.push(Span::styled("\u{f126} ", color));
+        out.extend(marked(branch.as_str().into(), color, query));
         for (n, sign, color) in
             [(c.unstaged, '*', Color::Yellow), (c.staged, '+', Color::Green), (c.untracked, '?', Color::DarkGray)]
         {
@@ -355,10 +387,6 @@ fn location<'a>(m: &'a Model, cwd: &Path, style: Folder) -> Vec<Span<'a>> {
 
 fn width(spans: &[Span]) -> usize {
     spans.iter().map(Span::width).sum()
-}
-
-fn folder_name(cwd: &Path) -> String {
-    cwd.file_name().unwrap_or(cwd.as_os_str()).to_string_lossy().into_owned()
 }
 
 /// Barre du bas ; `usage_hidden` signale que les jauges n'ont pas la place de s'afficher.
@@ -403,16 +431,17 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect, usage_hidden
     }
 }
 
-/// Saisie d'un prompt à la place de la barre : `Prompt → “<titre>” › <texte>`, curseur en fin de
-/// texte. Le début d'un texte trop long est coupé ; un retour à la ligne s'affiche `↵`.
-fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
-    let head = if prompt.title.is_empty() { "Prompt › ".to_string() } else { format!("Prompt → “{}” › ", prompt.title) };
-    let head = Span::styled(head, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+/// Ligne de saisie (prompt `w` dans la barre, filtre `f` sous la liste) : `head` puis le texte. Le
+/// début d'un texte trop long est coupé ; un retour à la ligne s'affiche `↵`. En saisie, `head` est
+/// en gras et le curseur en fin de texte ; sinon (filtre gardé), `head` est atténué, sans curseur.
+fn draw_input(frame: &mut Frame, head: String, text: &str, area: Rect, focused: bool) {
+    let style = Style::new().fg(Color::Cyan);
+    let head = Span::styled(head, if focused { style.add_modifier(Modifier::BOLD) } else { style.dim() });
     // Une colonne reste pour le curseur.
     let room = usize::from(area.width).saturating_sub(head.width() + 1);
     let mut used = 0;
-    let mut start = prompt.text.len();
-    for (i, c) in prompt.text.char_indices().rev() {
+    let mut start = text.len();
+    for (i, c) in text.char_indices().rev() {
         let w = shown(c).width().unwrap_or(0);
         if used + w > room {
             break;
@@ -421,9 +450,11 @@ fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
         start = i;
     }
     let cursor = area.x.saturating_add((head.width() + used) as u16).min(area.right().saturating_sub(1));
-    let text: String = prompt.text[start..].chars().map(shown).collect();
+    let text: String = text[start..].chars().map(shown).collect();
     frame.render_widget(Paragraph::new(Line::from(vec![head, Span::raw(text)])), area);
-    frame.set_cursor_position((cursor, area.y));
+    if focused {
+        frame.set_cursor_position((cursor, area.y));
+    }
 }
 
 /// Caractère affiché pour `c` dans la saisie : `↵` pour un retour à la ligne, une espace pour un

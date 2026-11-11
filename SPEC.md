@@ -16,6 +16,7 @@ permet d'aller au pane zellij d'une instance.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
 - Sessions headless : instances omp affichées dans aucun onglet zellij (touches `s` et `D`).
 - Envoi d'un prompt à une instance, sans aller à son pane (touche `w`).
+- Filtre de la liste par correspondance floue, comme fzf (touche `f`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Plateformes : macOS et Linux.
 
@@ -333,6 +334,7 @@ zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
 ### Liste vide
 
 Sans aucune instance ni session dormante : « Aucune instance omp » centré, barre du bas visible.
+Avec un filtre qui ne garde aucune ligne : « Aucune session ne correspond au filtre ».
 
 ### Copie de session
 
@@ -395,14 +397,14 @@ Anthropic
 
 ### Barre du bas
 
-- À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
-  dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
-  consommation n'a pas la place de s'afficher.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
+- À gauche : compteurs par état des lignes affichées, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des
+  états. Les sessions dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la
+  colonne de consommation n'a pas la place de s'afficher.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  f filtrer  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
-- La saisie d'un prompt (`w`) remplace la barre, message temporaire compris, jusqu'à son envoi ou
-  son abandon (voir « Envoi de prompt »).
+- La saisie d'un prompt (`w`) remplace la barre, message temporaire compris, jusqu'à sa fin (voir
+  « Envoi de prompt »).
 
 ## Interaction
 
@@ -417,7 +419,8 @@ Anthropic
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
 | `x` | Fermer l'instance et son pane, après confirmation (voir ci-dessous). Sur un sous-agent, ferme sa racine. |
 | `d` | Ouvrir ou fermer la copie de session (voir « Copie de session »). |
-| `Échap` | Fermer la copie de session. |
+| `f` | Ouvrir la saisie du filtre, avec la requête en cours (voir « Filtre »). |
+| `Échap` | Effacer le filtre s'il y en a un, sinon fermer la copie de session. |
 | `q`, `Ctrl-C` | Quitter. |
 
 - Les sous-agents sont dépliés par défaut. Une racine repliée affiche le nombre de sous-agents
@@ -502,6 +505,46 @@ xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
   focus.
 - `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`).
 - xst hors zellij : « xst hors zellij : arrière-plan impossible » pour `s` et `D`.
+
+### Filtre
+
+`f` ouvre la saisie d'un filtre, `Filtre › <requête>`, curseur en fin de texte, sur la ligne qui
+suit la dernière ligne de la liste : sous la liste, avant la copie de session quand elle est
+ouverte. La liste se réduit et se trie à chaque caractère tapé, comme dans fzf. Avec la copie
+ouverte, la ligne du filtre s'ajoute au tiers d'écran de la liste ; sinon, les jauges de
+consommation gardent toute la hauteur à droite.
+
+- Correspondance floue : chaque mot de la requête (séparés par des espaces) doit apparaître dans
+  le texte de la session, ses lettres dans l'ordre mais pas forcément côte à côte (`dpl` trouve
+  « Déploiement »). Casse intelligente : la casse ne compte que si la requête contient une
+  majuscule. Les lettres latines accentuées valent leur lettre de base, dans les deux sens.
+- Texte d'une session, tel qu'affiché : dossier (nom du dépôt principal à la racine d'un worktree),
+  branche et titre, plus l'id et le type de chacun de ses sous-agents, repliés ou non. Ligne
+  d'erreur : `pid <pid> : <message>`.
+- Le filtre garde ou retire une session entière : une racine qui correspond reste avec tous ses
+  sous-agents, et un sous-agent qui correspond garde sa racine et ses frères.
+- Tri par pertinence décroissante, sessions dormantes et lignes d'erreur mêlées aux instances ;
+  à pertinence égale, l'ordre sans filtre. Pertinence d'une session : somme, sur les mots de la
+  requête, du score de leur meilleure place dans son texte. Score d'une place : 16 points par
+  lettre du mot, moins 3 par lettre intercalée entre sa première et sa dernière lettre, plus 8 si
+  elle commence un mot du texte (début du texte ou après un caractère non alphanumérique). Places
+  candidates : chaque occurrence d'un bloc, et la fenêtre la plus courte qui finit avec la
+  première correspondance lettre à lettre (fzf v1) ; à score égal, la plus à gauche.
+- Quand la requête change, le curseur passe à la première ligne, la plus pertinente. La liste
+  continue de vivre : une instance qui apparaît et correspond s'affiche à son rang.
+- Les lettres trouvées sont en gras souligné, couleur et fond conservés, dans le dossier, la
+  branche, le titre, l'id et le type d'un sous-agent, et le message d'une ligne d'erreur. Chaque
+  champ est surligné seul : pour chaque mot qui y correspond, les lettres de sa meilleure place
+  dans ce champ. Un mot qui ne correspond qu'à cheval sur deux champs n'est surligné nulle part.
+- Touches de la saisie : caractères, `Retour arrière`, `Ctrl-U` (tout effacer), `↑`/`↓`,
+  `Ctrl-P`/`Ctrl-N` et `Ctrl-K`/`Ctrl-J` (déplacer le curseur dans la liste filtrée), `Entrée`
+  (garder le filtre et revenir aux commandes), `Échap` ou `Ctrl-C` (effacer le filtre et revenir
+  aux commandes, curseur sur la même ligne, liste dans son ordre sans filtre). Un texte collé
+  s'ajoute à la requête, ses retours à la ligne remplacés par des espaces.
+- Filtre gardé : toutes les commandes portent sur la liste filtrée, et sa ligne reste sous la
+  liste, `Filtre ›` atténué, sans curseur. `f` rouvre la saisie avec la même requête ; `Échap`
+  l'efface. Une requête vide ou faite d'espaces ne filtre rien et masque la ligne du filtre.
+- Le filtre n'est pas mémorisé : xst démarre sans filtre.
 
 ### Envoi de prompt
 

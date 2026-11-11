@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::filter::Query;
 use crate::git::Repo;
 use crate::pins::Pinned;
 use crate::record::{Kind, Record, State, Zellij};
@@ -49,12 +50,31 @@ pub struct Model {
     pub usage_error: Option<String>,
     /// Ids des panes headless (« supprimés » par zellij) de la session zellij d'xst.
     pub headless: HashSet<String>,
+    /// Requête du filtre (SPEC.md § Filtre) ; vide, la liste n'est pas filtrée.
+    pub filter: String,
+    /// Vrai pendant la saisie du filtre.
+    pub filtering: bool,
 }
 
 impl Model {
     /// Dépôt du dossier `cwd`, s'il est connu et que `cwd` est dans un dépôt.
     pub fn repo(&self, cwd: &Path) -> Option<&Repo> {
         self.repos.get(cwd).and_then(Option::as_ref)
+    }
+
+    /// Nom affiché du dossier `cwd` : à la racine d'un worktree lié, le nom du dépôt principal, la
+    /// branche suivant déjà.
+    pub fn folder_label(&self, cwd: &Path) -> String {
+        match self.repo(cwd).and_then(|r| r.alias.as_ref()) {
+            Some((root, main)) if root == cwd => main.clone(),
+            _ => cwd.file_name().unwrap_or(cwd.as_os_str()).to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Texte d'une session pour le filtre, tel qu'affiché : dossier, branche et titre.
+    fn filter_text(&self, cwd: &Path, title: &str) -> String {
+        let branch = self.repo(cwd).and_then(|r| r.label.as_deref()).unwrap_or("");
+        format!("{} {branch} {title}", self.folder_label(cwd))
     }
 
     /// Vrai si la session `session_id` est épinglée.
@@ -123,8 +143,10 @@ pub struct Row {
     pub tree: String,
 }
 
-/// Lignes à afficher, dans l'ordre : racines par `startedAt`, chacune suivie de ses sous-agents,
-/// puis les sessions dormantes dans l'ordre des épingles, puis les lignes d'erreur par pid.
+/// Lignes à afficher. Sans filtre, dans l'ordre : racines par `startedAt`, chacune suivie de ses
+/// sous-agents, puis les sessions dormantes dans l'ordre des épingles, puis les lignes d'erreur par
+/// pid. Le filtre garde ou retire une session entière, racine et sous-agents ensemble, et trie les
+/// sessions par pertinence décroissante, les ex æquo dans l'ordre sans filtre.
 pub fn rows(m: &Model) -> Vec<Row> {
     let mut roots: Vec<&Record> = m
         .instances
@@ -133,7 +155,9 @@ pub fn rows(m: &Model) -> Vec<Row> {
         .collect();
     roots.sort_by(|a, b| (&a.started_at, a.pid).cmp(&(&b.started_at, b.pid)));
 
-    let mut out = Vec::new();
+    let query = Query::new(&m.filter);
+    // Une session par groupe, avec sa pertinence.
+    let mut groups: Vec<(i64, Vec<Row>)> = Vec::new();
     for root in roots {
         let pid = root.pid;
         let root_key = (pid, ROOT_ID.to_string());
@@ -143,41 +167,71 @@ pub fn rows(m: &Model) -> Vec<Row> {
             .filter(|((p, _), r)| *p == pid && r.agent.kind == Kind::Sub)
             .map(|((_, id), r)| (id.as_str(), r))
             .collect();
+        let score = relevance(query.as_ref(), || {
+            // Les sous-agents comptent : `explore` trouve la session qui en a un. Triés pour une
+            // pertinence stable d'une reconstruction à l'autre.
+            let mut sorted: Vec<&Record> = subs.values().copied().collect();
+            sorted.sort_by(|a, b| a.agent.id.cmp(&b.agent.id));
+            let mut text = m.filter_text(&root.cwd, &root.title);
+            for sub in sorted {
+                text.push(' ');
+                text.push_str(&sub.agent.id);
+                text.push(' ');
+                text.push_str(&sub.agent.name);
+            }
+            text
+        });
+        let Some(score) = score else { continue };
         let folded = m.folded.contains(&root_key);
-        out.push(Row {
-            key: root_key.clone(),
+        let mut group = vec![Row {
+            key: root_key,
             kind: RowKind::Root,
             parent: None,
             hidden_children: if folded { subs.len() } else { 0 },
             tree: String::new(),
-        });
-        if folded {
-            continue;
+        }];
+        if !folded {
+            let mut children: HashMap<&str, Vec<&Record>> = HashMap::new();
+            for (id, sub) in &subs {
+                children.entry(attach_point(id, &subs)).or_default().push(sub);
+            }
+            for list in children.values_mut() {
+                list.sort_by(|a, b| (&a.started_at, &a.agent.id).cmp(&(&b.started_at, &b.agent.id)));
+            }
+            push_children(&mut group, pid, root, ROOT_ID, "  ", &children);
         }
-        let mut children: HashMap<&str, Vec<&Record>> = HashMap::new();
-        for (id, sub) in &subs {
-            children.entry(attach_point(id, &subs)).or_default().push(sub);
-        }
-        for list in children.values_mut() {
-            list.sort_by(|a, b| (&a.started_at, &a.agent.id).cmp(&(&b.started_at, &b.agent.id)));
-        }
-        push_children(&mut out, pid, root, ROOT_ID, "  ", &children);
+        groups.push((score, group));
     }
-    out.extend(m.headers.iter().filter(|p| !m.is_live(&p.id)).map(|p| Row {
-        key: (DORMANT_PID, p.id.clone()),
-        kind: RowKind::Dormant,
-        parent: None,
-        hidden_children: 0,
-        tree: String::new(),
-    }));
-    out.extend(m.errors.keys().map(|&pid| Row {
-        key: (pid, String::new()),
-        kind: RowKind::Error,
-        parent: None,
-        hidden_children: 0,
-        tree: String::new(),
-    }));
-    out
+    for p in m.headers.iter().filter(|p| !m.is_live(&p.id)) {
+        if let Some(score) = relevance(query.as_ref(), || m.filter_text(&p.cwd, &p.title)) {
+            let row = Row {
+                key: (DORMANT_PID, p.id.clone()),
+                kind: RowKind::Dormant,
+                parent: None,
+                hidden_children: 0,
+                tree: String::new(),
+            };
+            groups.push((score, vec![row]));
+        }
+    }
+    for (&pid, message) in &m.errors {
+        if let Some(score) = relevance(query.as_ref(), || format!("pid {pid} : {message}")) {
+            let row = Row { key: (pid, String::new()), kind: RowKind::Error, parent: None, hidden_children: 0, tree: String::new() };
+            groups.push((score, vec![row]));
+        }
+    }
+    // Tri stable : sans filtre, toutes les pertinences valent 0.
+    groups.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    groups.into_iter().flat_map(|(_, rows)| rows).collect()
+}
+
+/// Pertinence d'une session pour `query`, `None` si elle ne correspond pas ; 0 sans filtre, sans
+/// construire son texte.
+fn relevance(query: Option<&Query>, text: impl FnOnce() -> String) -> Option<i64> {
+    match query {
+        None => Some(0),
+        Some(query) => query.score(&text()),
+    }
 }
 
 /// Parent affiché d'un sous-agent : son `parentId` si la chaîne remonte jusqu'à la racine du pid,
@@ -407,6 +461,30 @@ mod tests {
         let rows = rows(&m);
         assert_eq!(keys(&rows), [(1, "Main")]);
         assert_eq!(rows[0].hidden_children, 2);
+    }
+
+    #[test]
+    fn filter_keeps_whole_sessions_matching_title_folder_or_subagent() {
+        let mut root = rec(1, "Main", None, "a");
+        root.title = "Déploiement".into();
+        let mut other = rec(2, "Main", None, "b");
+        other.cwd = "/src/backend".into();
+        let mut m = model(vec![root, rec(1, "Explore", Some("Main"), "c"), other, rec(3, "Main", None, "d")]);
+        m.headers = headers(&["x"]);
+        m.headers[0].title = "Revue".into();
+        m.errors.insert(4, "format v2 non supporté".into());
+
+        m.filter = "deploi".into();
+        assert_eq!(keys(&rows(&m)), [(1, "Main"), (1, "Explore")]);
+        // Un sous-agent qui correspond garde sa session entière, racine comprise.
+        m.filter = "explore".into();
+        assert_eq!(keys(&rows(&m)), [(1, "Main"), (1, "Explore")]);
+        m.filter = "bkend".into();
+        assert_eq!(keys(&rows(&m)), [(2, "Main")]);
+        m.filter = "revue".into();
+        assert_eq!(keys(&rows(&m)), [(0, "x")]);
+        m.filter = "v2".into();
+        assert_eq!(keys(&rows(&m)), [(4, "")]);
     }
 
     #[test]

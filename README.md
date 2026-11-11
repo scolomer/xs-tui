@@ -31,6 +31,9 @@ pinned session that is no longer running.
 - **Send a prompt.** `w` types a prompt in the bottom bar and sends it to the selected instance,
   as if typed in its editor: it starts a turn at rest and steers a running one. It reaches
   headless instances and instances outside xst's zellij session too.
+- **Filter.** `f` opens a filter line under the list that narrows and sorts it by relevance as you
+  type, like fzf: fuzzy, smart-case and accent-insensitive matching on each session's folder,
+  branch, title and subagents, matched letters underlined.
 - **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
   windows, like omp's `/usage`: percentage used and time to reset, colored by omp's status.
 
@@ -92,7 +95,8 @@ Run `xst` in a zellij pane. It renames its tab to `xs-tui`.
 | `x` | Close the instance and its pane; press `x` again within 3 s to confirm |
 | `d` | Open or close the session copy |
 | `w` | Type a prompt for the instance (a subagent's goes to its root); `Enter` sends, `Alt-Enter` adds a line, `Esc` cancels |
-| `Esc` | Close the session copy |
+| `f` | Filter the list; `Enter` keeps the filter, `Esc` clears it |
+| `Esc` | Clear the filter, or close the session copy |
 | `q` / `Ctrl-C` | Quit |
 
 ## Development
