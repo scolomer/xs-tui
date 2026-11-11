@@ -1,12 +1,13 @@
 /**
  * xs-tui publisher: writes each agent's run state to `~/.omp/run/xs-tui/<pid>/<agentId>.json`
- * so the xst dashboard can show it (SPEC.md § Extension omp).
+ * so the xst dashboard can show it (SPEC.md § Extension omp), and forwards the prompts xst drops in
+ * `<pid>/inbox/` to the main session (SPEC.md § Boîte de prompts).
  *
  * The module is imported once per process and the factory is rebound for every subagent: module
  * variables are shared between the main session and its subagents, closure variables are per agent.
  */
 import * as fs from "node:fs/promises";
-import { rmSync } from "node:fs";
+import { rmSync, watch, type FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -21,6 +22,7 @@ const POLL_MS = 500;
 let rootPublishes = false;
 
 const pidDir = path.join(RUN_DIR, String(process.pid));
+const inboxDir = path.join(pidDir, "inbox");
 
 export default function xsTui(pi: ExtensionAPI) {
 	pi.setLabel("xs-tui");
@@ -33,6 +35,10 @@ export default function xsTui(pi: ExtensionAPI) {
 	let file: string | undefined;
 	let pollTimer: Timer | undefined;
 	let exitHookInstalled = false;
+	let inbox: FSWatcher | undefined;
+	/** A drain is running; `drainAgain` asks it for one more pass over the inbox. */
+	let draining = false;
+	let drainAgain = false;
 
 	function record(ctx: ExtensionContext) {
 		const session = process.env.ZELLIJ_SESSION_NAME;
@@ -87,6 +93,44 @@ export default function xsTui(pi: ExtensionAPI) {
 		file = undefined;
 	}
 
+	/** Sends the inbox's prompts to omp in name order (send order), deleting each one first. */
+	async function drainInbox() {
+		if (draining) {
+			drainAgain = true;
+			return;
+		}
+		draining = true;
+		try {
+			do {
+				drainAgain = false;
+				// Dot files are xst's partial writes, renamed into place once complete.
+				const names = (await fs.readdir(inboxDir)).filter(name => !name.startsWith(".")).sort();
+				for (const name of names) {
+					const file = path.join(inboxDir, name);
+					const text = await fs.readFile(file, "utf8");
+					await fs.rm(file, { force: true });
+					// Like a prompt typed in the editor: starts a turn at rest, steers a running one.
+					if (text.trim()) pi.sendUserMessage(text);
+				}
+			} while (drainAgain);
+		} catch (error) {
+			pi.logger.warn("xs-tui: inbox read failed", { dir: inboxDir, error: String(error) });
+		} finally {
+			draining = false;
+		}
+	}
+
+	/** Creates and watches the inbox; its existence tells xst that this omp takes prompts. */
+	async function openInbox() {
+		if (inbox) return;
+		try {
+			await fs.mkdir(inboxDir, { recursive: true });
+			inbox = watch(inboxDir, () => void drainInbox());
+		} catch (error) {
+			pi.logger.warn("xs-tui: inbox setup failed", { dir: inboxDir, error: String(error) });
+		}
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.agent.kind === "main") {
 			enabled = ctx.mode === "tui";
@@ -103,6 +147,8 @@ export default function xsTui(pi: ExtensionAPI) {
 		if (!enabled) return;
 		startedAt = new Date().toISOString();
 		reduce(tracker, { type: "session_start" });
+		// Before the first record: xst may send a prompt as soon as it sees the instance.
+		if (ctx.agent.kind === "main") await openInbox();
 		await publish(ctx);
 		if (ctx.agent.kind !== "main") return;
 		if (pollTimer) ctx.clearTimer(pollTimer);
@@ -167,6 +213,8 @@ export default function xsTui(pi: ExtensionAPI) {
 		enabled = false;
 		if (pollTimer) ctx.clearTimer(pollTimer);
 		pollTimer = undefined;
+		inbox?.close();
+		inbox = undefined;
 		await remove(ctx);
 	});
 }

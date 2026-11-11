@@ -32,6 +32,8 @@ pub enum Event {
     /// Ids des panes headless de la session zellij courante.
     Headless(std::collections::HashSet<String>),
     Key(KeyEvent),
+    /// Texte collé (bracketed paste).
+    Paste(String),
     Resize,
 }
 
@@ -67,7 +69,7 @@ pub fn watch_git_dir(watcher: &mut RecommendedWatcher, git_dir: &Path) -> notify
     watcher.watch(git_dir, RecursiveMode::NonRecursive)
 }
 
-/// Thread de lecture du terminal : touches et redimensionnements.
+/// Thread de lecture du terminal : touches, textes collés et redimensionnements.
 pub fn spawn_terminal_reader(tx: Sender<Event>) {
     std::thread::Builder::new()
         .name("terminal".into())
@@ -75,6 +77,7 @@ pub fn spawn_terminal_reader(tx: Sender<Event>) {
             while let Ok(event) = term::read() {
                 let sent = match event {
                     term::Event::Key(key) if key.kind == KeyEventKind::Press => tx.send(Event::Key(key)),
+                    term::Event::Paste(text) => tx.send(Event::Paste(text)),
                     term::Event::Resize(..) => tx.send(Event::Resize),
                     _ => Ok(()),
                 };

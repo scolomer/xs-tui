@@ -28,6 +28,9 @@ pinned session that is no longer running.
   listed after omp exits (`○`); `Enter` resumes them in a new zellij tab.
 - **Session copy.** `d` splits the screen and shows a live, read-only copy of the selected
   session's screen under the list, exactly as omp draws it.
+- **Send a prompt.** `w` types a prompt in the bottom bar and sends it to the selected instance,
+  as if typed in its editor: it starts a turn at rest and steers a running one. It reaches
+  headless instances and instances outside xst's zellij session too.
 - **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
   windows, like omp's `/usage`: percentage used and time to reset, colored by omp's status.
 
@@ -36,11 +39,13 @@ pinned session that is no longer running.
 omp exposes its run state only on its own terminal, so the repository holds two parts:
 
 - **`extension/`**: the omp extension *xs-tui* (TypeScript, Bun). Loaded by every omp, it writes
-  each agent's state to `~/.omp/run/xs-tui/<pid>/<agentId>.json` whenever it changes.
+  each agent's state to `~/.omp/run/xs-tui/<pid>/<agentId>.json` whenever it changes, and forwards
+  the prompts dropped in `~/.omp/run/xs-tui/<pid>/inbox/` to the main session.
 - **The `xst` binary** (Rust, [ratatui](https://ratatui.rs)). It watches those files, the omp
   processes, the git repositories and `~/.omp/agent/session-pins.json`, and redraws on change.
-  It writes only `session-pins.json`, on `p`, under the same lock as omp. Usage comes from
-  `omp usage --json`, which serves omp's own cache, so xst needs no credentials of its own.
+  It writes `session-pins.json`, on `p`, under the same lock as omp, and prompt files, on `w`,
+  into an instance's inbox. Usage comes from `omp usage --json`, which serves omp's own cache, so
+  xst needs no credentials of its own.
 
 Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three timed refreshes: the
 git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
@@ -86,6 +91,7 @@ Run `xst` in a zellij pane. It renames its tab to `xs-tui`.
 | `p` | Pin or unpin the row's session (unpinning a dormant session removes its row) |
 | `x` | Close the instance and its pane; press `x` again within 3 s to confirm |
 | `d` | Open or close the session copy |
+| `w` | Type a prompt for the instance (a subagent's goes to its root); `Enter` sends, `Alt-Enter` adds a line, `Esc` cancels |
 | `Esc` | Close the session copy |
 | `q` / `Ctrl-C` | Quit |
 

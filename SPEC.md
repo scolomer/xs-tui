@@ -15,10 +15,11 @@ permet d'aller au pane zellij d'une instance.
   xst, au premier plan ou en arrière-plan.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
 - Sessions headless : instances omp affichées dans aucun onglet zellij (touches `s` et `D`).
+- Envoi d'un prompt à une instance, sans aller à son pane (touche `w`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Plateformes : macOS et Linux.
 
-Hors périmètre v1 : envoi de prompts ou de commandes à omp, affichage du détail de l'état (outil en
+Hors périmètre v1 : envoi de commandes à omp (`/…`), affichage du détail de l'état (outil en
 cours, question posée, message d'erreur), instances omp non interactives (`omp -p`, jobs omp-cron,
 modes `json`/`rpc`).
 
@@ -31,6 +32,7 @@ flowchart LR
     S[extension · sous-agents] -->|écriture atomique| F2["&lt;pid&gt;/&lt;agentId&gt;.json"]
   end
   F1 & F2 -->|notify : FSEvents / inotify| T[xst]
+  T -->|w : &lt;pid&gt;/inbox/&lt;n&gt;.txt| M
   K[kqueue NOTE_EXIT / pidfd] -->|mort du pid| T
   G[".git/HEAD : fs-watch + gix"] --> T
   T -->|zellij action focus-pane-id| Z[pane zellij]
@@ -82,6 +84,9 @@ partagé entre sessions, aucune écriture concurrente sur un même fichier.
 
 Toute écriture est atomique : écriture dans un fichier temporaire du même dossier puis `rename`.
 Un lecteur ne voit jamais un fichier partiel.
+
+Le dossier `<pid>/` contient aussi la boîte de prompts `inbox/` de la session main (voir « Boîte de
+prompts ») : xst ne lit que les fichiers `*.json` du dossier.
 
 L'extension écrit uniquement quand un champ change, jamais à la cadence d'une animation.
 
@@ -153,6 +158,23 @@ Sur `session_switch` (reprise d'une autre session dans le même process), l'exte
 - Une session main supprime le dossier `<pid>/` entier à sa fermeture (`session_shutdown`) et à la
   sortie du process.
 - Après un crash ou un `kill -9`, le dossier reste ; xst le supprime (voir « Vivacité »).
+
+### Boîte de prompts
+
+La liaison main crée `~/.omp/run/xs-tui/<pid>/inbox/` au `session_start`, avant son premier
+fichier publié, et la surveille (`fs.watch`) jusqu'au `session_shutdown`. Son existence indique à
+xst que l'instance reçoit des prompts : un omp qui a chargé une version précédente de l'extension
+n'en a pas.
+
+- xst y dépose chaque prompt dans un fichier texte UTF-8, écrit sous un nom caché
+  (`.<nom>.tmp`) puis renommé en `<horodatage ns sur 20 chiffres>-<compteur sur 6 chiffres>.txt` :
+  l'ordre des noms est l'ordre d'envoi.
+- À chaque événement du dossier, l'extension lit les fichiers non cachés dans l'ordre des noms ;
+  pour chacun, elle le supprime puis appelle `pi.sendUserMessage(<texte>)`, sauf s'il est vide.
+  Une lecture en cours en relance une autre au lieu de se doubler.
+- `sendUserMessage` sans `deliverAs` agit comme un prompt tapé dans l'éditeur d'omp : au repos, il
+  lance un tour ; pendant un tour, il s'insère comme un message de guidage (steer). Le texte est
+  envoyé tel quel : ni commande `/…` ni modèle de prompt n'est interprété.
 
 ## xst
 
@@ -376,9 +398,11 @@ Anthropic
 - À gauche : compteurs par état, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des états. Les sessions
   dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la colonne de
   consommation n'a pas la place de s'afficher.
-- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
+- À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
+- La saisie d'un prompt (`w`) remplace la barre, message temporaire compris, jusqu'à son envoi ou
+  son abandon (voir « Envoi de prompt »).
 
 ## Interaction
 
@@ -387,6 +411,7 @@ Anthropic
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous). |
 | `s` | Reprendre la session dormante en headless, sans quitter xst (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
+| `w` | Saisir un prompt et l'envoyer à l'instance (à sa racine pour un sous-agent), sans quitter xst (voir « Envoi de prompt »). Sans effet sur une ligne d'erreur. |
 | `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
@@ -478,6 +503,29 @@ xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
 - `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`).
 - xst hors zellij : « xst hors zellij : arrière-plan impossible » pour `s` et `D`.
 
+### Envoi de prompt
+
+`w` ouvre la saisie d'un prompt pour l'instance de la ligne, celle de sa racine pour un sous-agent :
+un sous-agent n'a pas d'éditeur. La saisie passe par la boîte de prompts de l'extension (voir
+« Boîte de prompts ») et non par zellij : elle atteint aussi une instance headless, d'une autre
+session zellij ou hors zellij, et ne touche pas au texte en cours dans l'éditeur d'omp.
+
+- La barre du bas devient `Prompt → “<titre>” › <texte>` (`Prompt › <texte>` sans titre), curseur
+  en fin de texte. Le début d'un texte plus large que la barre est masqué ; un retour à la ligne
+  s'affiche `↵`.
+- L'instance visée est fixée à l'ouverture : déplacer la liste n'est pas possible pendant la
+  saisie, et une liste qui change ne la modifie pas.
+- Touches de la saisie : caractères, `Retour arrière` (dernier caractère), `Ctrl-U` (tout effacer),
+  `Alt-Entrée` (retour à la ligne), `Entrée` (envoyer), `Échap` ou `Ctrl-C` (abandonner sans
+  envoyer). Les autres commandes d'xst attendent la fin de la saisie.
+- Un texte collé arrive en un bloc (bracketed paste, activé au démarrage d'xst) : ses retours à la
+  ligne restent dans le prompt au lieu de l'envoyer. `\r\n` et `\r` y deviennent `\n`.
+- `Entrée` sur un texte vide ou fait d'espaces ferme la saisie sans rien envoyer. Sinon, xst dépose
+  le prompt et affiche « Prompt envoyé à “<titre>” » (« Prompt envoyé » sans titre).
+- Instance disparue pendant la saisie : « “<titre>” fermée : prompt non envoyé ». Instance sans
+  boîte de prompts : « Extension xs-tui trop ancienne dans cette instance : relancer omp ».
+- `w` sur une session dormante : « Session dormante : s pour la reprendre en arrière-plan ».
+
 ## Risques connus
 
 - Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
@@ -487,6 +535,8 @@ xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
 - L'état (publié par l'extension) et la branche (lue par xst) viennent de deux sources
   distinctes.
 - Un `/rename`, un `/move` ou un `/wt` fait au repos apparaît avec au plus 500 ms de retard.
+- Un prompt envoyé pendant qu'omp attend une réponse (outil `ask`, approbation d'outil) ne répond
+  pas à la question : omp le garde comme message de guidage pour la suite du tour.
 - La copie de session est relue toutes les 250 ms : un écran qui change entre deux lectures n'y
   apparaît pas, et le pane est coupé s'il est plus grand que la zone de copie.
 - Les jauges dépendent du format JSON d'`omp usage`, qui peut évoluer avec omp.

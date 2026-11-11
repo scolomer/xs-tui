@@ -8,16 +8,18 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
+use unicode_width::UnicodeWidthChar;
 
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
+use crate::prompt::Prompt;
 use crate::record::State;
 use crate::usage::{self, Status};
 use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const HELP: &str =
-    "↑↓/jk naviguer  ⏎ aller au pane  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
+    "↑↓/jk naviguer  ⏎ aller au pane  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
 const EMPTY: &str = "Aucune instance omp";
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;
@@ -31,6 +33,7 @@ pub fn draw(
     own_zellij: Option<&str>,
     list: &mut ListState,
     mirror: Option<&Mirror>,
+    prompt: Option<&Prompt>,
 ) {
     let area = frame.area();
     let (list_area, copy, bar_area) = match mirror {
@@ -86,7 +89,10 @@ pub fn draw(
     if let Some((mirror, separator_area, copy_area)) = copy {
         draw_copy(frame, m, rows, mirror, separator_area, copy_area);
     }
-    draw_bar(frame, m, rows, bar_area, usage_hidden);
+    match prompt {
+        Some(prompt) => draw_prompt(frame, prompt, bar_area),
+        None => draw_bar(frame, m, rows, bar_area, usage_hidden),
+    }
 }
 
 /// Jauges de consommation dans une colonne à droite de `area`, si la liste (`list_width`) garde sa
@@ -394,5 +400,38 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect, usage_hidden
         frame.render_widget(Paragraph::new(HELP).dim(), help_area);
     } else {
         frame.render_widget(Paragraph::new(left), area);
+    }
+}
+
+/// Saisie d'un prompt à la place de la barre : `Prompt → “<titre>” › <texte>`, curseur en fin de
+/// texte. Le début d'un texte trop long est coupé ; un retour à la ligne s'affiche `↵`.
+fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
+    let head = if prompt.title.is_empty() { "Prompt › ".to_string() } else { format!("Prompt → “{}” › ", prompt.title) };
+    let head = Span::styled(head, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    // Une colonne reste pour le curseur.
+    let room = usize::from(area.width).saturating_sub(head.width() + 1);
+    let mut used = 0;
+    let mut start = prompt.text.len();
+    for (i, c) in prompt.text.char_indices().rev() {
+        let w = shown(c).width().unwrap_or(0);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        start = i;
+    }
+    let cursor = area.x.saturating_add((head.width() + used) as u16).min(area.right().saturating_sub(1));
+    let text: String = prompt.text[start..].chars().map(shown).collect();
+    frame.render_widget(Paragraph::new(Line::from(vec![head, Span::raw(text)])), area);
+    frame.set_cursor_position((cursor, area.y));
+}
+
+/// Caractère affiché pour `c` dans la saisie : `↵` pour un retour à la ligne, une espace pour un
+/// autre caractère de contrôle (tabulation collée).
+fn shown(c: char) -> char {
+    match c {
+        '\n' => '↵',
+        c if c.is_control() => ' ',
+        c => c,
     }
 }

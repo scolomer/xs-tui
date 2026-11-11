@@ -9,6 +9,7 @@ mod mirror;
 mod model;
 mod pins;
 mod proc;
+mod prompt;
 mod record;
 mod ui;
 mod usage;
@@ -20,13 +21,14 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyEvent, KeyModifiers};
 use notify::RecommendedWatcher;
 use ratatui::widgets::ListState;
 
 use mirror::Mirror;
 use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
 use pins::Pinned;
+use prompt::Prompt;
 use record::{Kind, Parsed, State};
 use watch::Event;
 use zellij::Headless;
@@ -63,6 +65,8 @@ struct App {
     plugin: Result<zellij::Plugin, String>,
     /// Demandes au thread qui relit les panes headless.
     headless: Sender<()>,
+    /// Prompt en cours de saisie, ouvert par `w` (SPEC.md § Envoi de prompt).
+    prompt: Option<Prompt>,
 }
 
 fn main() {
@@ -108,9 +112,12 @@ fn main() {
         close_pending: None,
         plugin,
         headless,
+        prompt: None,
     };
 
     let mut terminal = ratatui::init();
+    // Un texte collé arrive en un bloc : ses retours à la ligne n'envoient pas le prompt.
+    let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
     watch::spawn_terminal_reader(tx);
     app.rescan();
     app.load_pins();
@@ -126,6 +133,7 @@ fn main() {
         app.notify(message);
     }
     let result = app.run(&mut terminal, &rx);
+    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     if let Err(err) = result {
         eprintln!("xst: {err}");
@@ -137,7 +145,15 @@ impl App {
     fn run(&mut self, terminal: &mut ratatui::DefaultTerminal, rx: &Receiver<Event>) -> std::io::Result<()> {
         loop {
             terminal.draw(|f| {
-                ui::draw(f, &self.model, &self.rows, self.own_zellij.as_deref(), &mut self.list, self.mirror.as_ref());
+                ui::draw(
+                    f,
+                    &self.model,
+                    &self.rows,
+                    self.own_zellij.as_deref(),
+                    &mut self.list,
+                    self.mirror.as_ref(),
+                    self.prompt.as_ref(),
+                );
             })?;
 
             let first = match self.wake_after() {
@@ -172,6 +188,12 @@ impl App {
                     Event::Notice(message) => self.notify(message),
                     Event::Headless(panes) => self.model.headless = panes,
                     Event::Resize => {}
+                    Event::Paste(text) => {
+                        if let Some(prompt) = &mut self.prompt {
+                            prompt.paste(&text);
+                        }
+                    }
+                    Event::Key(key) if self.prompt.is_some() => self.prompt_key(key),
                     Event::Key(key) => {
                         if !self.key(key) {
                             return Ok(());
@@ -430,6 +452,20 @@ impl App {
                     self.notify(message);
                 }
             }
+            KeyCode::Char('w') => {
+                let Some(row) = index.map(|i| &self.rows[i]) else { return true };
+                match row.kind {
+                    RowKind::Error => {}
+                    RowKind::Dormant => self.notify("Session dormante : s pour la reprendre en arrière-plan".to_string()),
+                    RowKind::Root | RowKind::Sub { .. } => {
+                        // Un sous-agent n'a pas d'éditeur : le prompt va à sa racine.
+                        let pid = row.key.0;
+                        let Some(root) = self.model.instances.get(&(pid, ROOT_ID.to_string())) else { return true };
+                        self.prompt = Some(Prompt::new(pid, root.title.clone()));
+                        self.model.message = None;
+                    }
+                }
+            }
             KeyCode::Char('s') => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 let message = match self.model.dormant(&row.key) {
@@ -472,6 +508,45 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Touche pendant la saisie d'un prompt : les autres commandes attendent sa fin.
+    fn prompt_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = &mut self.prompt else { return };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.prompt = None,
+            KeyCode::Char('c') if ctrl => self.prompt = None,
+            KeyCode::Char('u') if ctrl => prompt.text.clear(),
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => prompt.text.push('\n'),
+            KeyCode::Enter => {
+                if let Some(prompt) = self.prompt.take() {
+                    self.send_prompt(prompt);
+                }
+            }
+            KeyCode::Backspace => {
+                prompt.text.pop();
+            }
+            KeyCode::Char(c) if !ctrl => prompt.text.push(c),
+            _ => {}
+        }
+    }
+
+    /// Dépose le prompt saisi pour son instance ; un prompt vide ferme la saisie sans rien envoyer.
+    fn send_prompt(&mut self, prompt: Prompt) {
+        if prompt.text.trim().is_empty() {
+            return;
+        }
+        let message = if self.model.instances.contains_key(&(prompt.pid, ROOT_ID.to_string())) {
+            match prompt::send(&self.run_dir, prompt.pid, &prompt.text) {
+                Ok(()) if prompt.title.is_empty() => "Prompt envoyé".to_string(),
+                Ok(()) => format!("Prompt envoyé à “{}”", prompt.title),
+                Err(message) => message,
+            }
+        } else {
+            format!("{} fermée : prompt non envoyé", label(&prompt.title))
+        };
+        self.notify(message);
     }
 
     /// Dossier où reprendre la session dormante `p` (`$HOME` s'il a disparu), si aucun omp ne l'a
