@@ -413,6 +413,15 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect, usage_hidden
         let glyph = indicator(state, m.tick);
         spans.push(Span::styled(format!("{n} {}", glyph.content), glyph.style));
     }
+    if let Some(status) = &m.manager {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(match &status.problem {
+            None => Span::raw(format!("manager : {} parleys", status.parleys)).dim(),
+            Some(problem) => Span::styled(format!("manager : {problem}"), Color::Red),
+        });
+    }
     if usage_hidden {
         if !spans.is_empty() {
             spans.push(Span::raw("  "));

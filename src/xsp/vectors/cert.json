@@ -1,0 +1,50 @@
+{
+  "description": "cert = {body, sig}; sig = Ed25519(rank seed, UTF-8(JCS(body))), base64url",
+  "now": "2026-11-01T12:00:01.000Z",
+  "cases": [
+    {
+      "signing_key": "xs2:relay.example.com:8443:CZvT9oQ5Qyyla-4NhysqNg:prod-k8s:A:pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA:giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE",
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "sign_pub": "ddVBtpKnwJU4bDQZ7XYj16tJgbPn80A-vtkJyaU8AjM",
+      "kem_pub": "1TfPTA_CbyKHBk96jkLIDq0Wqqnk6FQJInfeakMxfn4",
+      "jcs_body": "{\"alias\":\"alice\",\"issued_at\":\"2026-11-01T10:00:00.000Z\",\"kem_pub\":\"1TfPTA_CbyKHBk96jkLIDq0Wqqnk6FQJInfeakMxfn4\",\"parley_id\":\"CZvT9oQ5Qyyla-4NhysqNg\",\"rank\":\"A\",\"role\":\"master « accès prod » 🚀\",\"session\":\"019a5f3c-1b2d-7e4f-8a6b-1c2d3e4f5a6b\",\"sign_pub\":\"ddVBtpKnwJU4bDQZ7XYj16tJgbPn80A-vtkJyaU8AjM\",\"v\":1}",
+      "cert": {
+        "body": {
+          "v": 1,
+          "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+          "rank": "A",
+          "sign_pub": "ddVBtpKnwJU4bDQZ7XYj16tJgbPn80A-vtkJyaU8AjM",
+          "kem_pub": "1TfPTA_CbyKHBk96jkLIDq0Wqqnk6FQJInfeakMxfn4",
+          "alias": "alice",
+          "role": "master « accès prod » 🚀",
+          "session": "019a5f3c-1b2d-7e4f-8a6b-1c2d3e4f5a6b",
+          "issued_at": "2026-11-01T10:00:00.000Z"
+        },
+        "sig": "F7132n8GdDLO5ohOWCUbRUOKw109bmPhWoIS2vMPviibENvPYOQM0ZDvzF6u18nXon5vcO1A9YP5RWC_hJqODQ"
+      },
+      "fp": "xs:tokhQumSTjTh1svZYiLzwNGj0TxKD1hR4OkdzC9ZG5s"
+    },
+    {
+      "signing_key": "xs2:relay.example.com:8443:CZvT9oQ5Qyyla-4NhysqNg:prod-k8s:S:giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE:qWcHYx2YZoZeHn1SSHjoEyoYETZcb8QwxRPsVZbdV54",
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "sign_pub": "_N2w7eaUqczKC3pgsMxWShh8ROMA5halMJWhFNfc2aA",
+      "kem_pub": "rxrfbv8P9XDDEdM07LP_d6ec8RwGnPALuKz7OU35cg0",
+      "jcs_body": "{\"alias\":\"prod-box\",\"issued_at\":\"2026-11-01T10:00:00.000Z\",\"kem_pub\":\"rxrfbv8P9XDDEdM07LP_d6ec8RwGnPALuKz7OU35cg0\",\"parley_id\":\"CZvT9oQ5Qyyla-4NhysqNg\",\"rank\":\"S\",\"role\":\"accès prod k8s, kubectl lecture\",\"session\":\"019a5f41-0c9e-7d3a-9b5f-2e3d4c5b6a7f\",\"sign_pub\":\"_N2w7eaUqczKC3pgsMxWShh8ROMA5halMJWhFNfc2aA\",\"v\":1}",
+      "cert": {
+        "body": {
+          "v": 1,
+          "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+          "rank": "S",
+          "sign_pub": "_N2w7eaUqczKC3pgsMxWShh8ROMA5halMJWhFNfc2aA",
+          "kem_pub": "rxrfbv8P9XDDEdM07LP_d6ec8RwGnPALuKz7OU35cg0",
+          "alias": "prod-box",
+          "role": "accès prod k8s, kubectl lecture",
+          "session": "019a5f41-0c9e-7d3a-9b5f-2e3d4c5b6a7f",
+          "issued_at": "2026-11-01T10:00:00.000Z"
+        },
+        "sig": "21l1aCfzBdpnxU9UVErzGW_Q9e1uuUVW-G8CEcS-8rqyrX3r6LdbBGnkLVzK7AZwFFpvWYvlBREtlJhYTcJWCA"
+      },
+      "fp": "xs:kSv0_p4Ie0-XQqK0ccIBmNn_-HhIuHKl9Qn8Ix3Q0nI"
+    }
+  ]
+}

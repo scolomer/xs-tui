@@ -5,13 +5,23 @@ edition = "2024"
 
 [dependencies]
 ansi-to-tui = "8.0.1"
+base64 = "0.23"
+chacha20poly1305 = "0.11"
 crossterm = "0.29"
+ed25519-dalek = "3"
+getrandom = "0.3"
 gix = { version = "0.90", default-features = false, features = ["sha1", "status"] }
+hkdf = "0.13"
+hpke = { version = "0.15", default-features = false, features = ["alloc", "x25519", "chacha", "getrandom"] }
 libc = "0.2"
 notify = "8.2"
 ratatui = "0.30"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
+serde_jcs = "0.2"
 serde_json = "1"
+sha2 = "0.11"
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 unicode-width = "0.2"
 
 [profile.release]

@@ -1,0 +1,32 @@
+{
+  "description": "Parley key format xs2:<relay>:<parley_id>:<name>:<rank>:<seed>:<other>; other = seed_answer for rank A, pub_ask for rank S; the relay may contain a port",
+  "cases": [
+    {
+      "key": "xs2:relay.example.com:8443:CZvT9oQ5Qyyla-4NhysqNg:prod-k8s:A:pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA:giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE",
+      "relay": "relay.example.com:8443",
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "name": "prod-k8s",
+      "rank": "A",
+      "seed": "pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA",
+      "other": "giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE"
+    },
+    {
+      "key": "xs2:relay.example.com:8443:CZvT9oQ5Qyyla-4NhysqNg:prod-k8s:S:giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE:qWcHYx2YZoZeHn1SSHjoEyoYETZcb8QwxRPsVZbdV54",
+      "relay": "relay.example.com:8443",
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "name": "prod-k8s",
+      "rank": "S",
+      "seed": "giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE",
+      "other": "qWcHYx2YZoZeHn1SSHjoEyoYETZcb8QwxRPsVZbdV54"
+    },
+    {
+      "key": "xs2:relay.example.com:CZvT9oQ5Qyyla-4NhysqNg:prod-k8s:A:pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA:giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE",
+      "relay": "relay.example.com",
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "name": "prod-k8s",
+      "rank": "A",
+      "seed": "pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA",
+      "other": "giB0bK3hXUR3QkF76XDqhIz-Wp6rV_ULCDkfXBg4NjE"
+    }
+  ]
+}

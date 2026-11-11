@@ -1,10 +1,11 @@
 //! Événements de la boucle principale : fichiers publiés, épingles, gitdirs, statut git, mort d'un
-//! pid, terminal.
+//! pid, parleys xs-parley, session-manager, terminal.
 //!
 //! Une seule instance `notify` (FSEvents sur macOS, inotify sur Linux) surveille le dossier
-//! d'exécution récursivement, le dossier agent d'omp (pour `session-pins.json`) et les gitdirs des
-//! instances, sans récursion.
+//! d'exécution récursivement, le dossier agent d'omp (pour `session-pins.json`), le dossier
+//! `parleys/` d'xs-parley et les gitdirs des instances, sans récursion.
 
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
@@ -34,21 +35,32 @@ pub enum Event {
     Key(KeyEvent),
     /// Texte collé (bracketed paste).
     Paste(String),
+    /// Un fichier de `parleys/` a changé : le session-manager rejoint ou quitte des parleys.
+    Parleys,
+    /// Demande de réveil ou état du session-manager xs-parley.
+    Xsp(crate::xsp::XspEvent),
     Resize,
 }
 
-/// Surveille `run_dir` (créé au besoin) et `agent_dir`. Les événements arrêtent d'arriver quand le
-/// watcher est libéré.
-pub fn start(run_dir: &Path, agent_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWatcher> {
+/// Surveille `run_dir` (créé au besoin), `agent_dir` et `parleys_dir` (créé en 0700 au besoin). Les
+/// événements arrêtent d'arriver quand le watcher est libéré.
+pub fn start(run_dir: &Path, agent_dir: &Path, parleys_dir: &Path, tx: Sender<Event>) -> notify::Result<RecommendedWatcher> {
     std::fs::create_dir_all(run_dir)?;
-    // FSEvents rapporte des chemins canoniques : comparer avec la forme canonique du dossier.
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parleys_dir)?;
+    // FSEvents rapporte des chemins canoniques : comparer avec la forme canonique des dossiers.
     let root: PathBuf = run_dir.canonicalize()?;
     let prefix = root.clone();
+    let parleys: PathBuf = parleys_dir.canonicalize()?;
+    let parleys_prefix = parleys.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
         let head = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "HEAD" || n == "index"));
         let pins = event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == PINS_FILE));
         let published = event.paths.iter().any(|p| p.starts_with(&prefix) && !p.extension().is_some_and(|e| e == "tmp"));
+        let parley = event
+            .paths
+            .iter()
+            .any(|p| p.parent() == Some(parleys_prefix.as_path()) && p.extension().is_some_and(|e| e == "json"));
         if head {
             let _ = tx.send(Event::Head);
         }
@@ -58,9 +70,13 @@ pub fn start(run_dir: &Path, agent_dir: &Path, tx: Sender<Event>) -> notify::Res
         if published {
             let _ = tx.send(Event::Fs);
         }
+        if parley {
+            let _ = tx.send(Event::Parleys);
+        }
     })?;
     watcher.watch(&root, RecursiveMode::Recursive)?;
     watcher.watch(agent_dir, RecursiveMode::NonRecursive)?;
+    watcher.watch(&parleys, RecursiveMode::NonRecursive)?;
     Ok(watcher)
 }
 

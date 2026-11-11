@@ -36,6 +36,11 @@ pinned session that is no longer running.
   branch, title and subagents, matched letters underlined.
 - **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
   windows, like omp's `/usage`: percentage used and time to reset, colored by omp's status.
+- **Session-manager xs-parley.** Inside zellij, xst joins every xs-parley parley
+  of the machine as its session-manager (rank `M`). When a master asks a session that is offline,
+  it sends xst a `spawn`: xst resumes that omp session headless, like `s`, and answers once the
+  instance publishes, so the master can deliver its request. The bottom bar shows
+  `manager : N parleys`, or the problem in red.
 
 ## How it works
 
@@ -54,6 +59,12 @@ Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three time
 git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
 because zellij does not render a pane whose tab is hidden; and usage every 15 min, on top of the
 refresh after each finished turn, to catch usage made outside omp.
+
+xst also embeds a native xs-parley client (`src/xsp/`: Ed25519, HPKE, XChaCha20-Poly1305 and a
+rustls WebSocket per relay). Its identity lives in `~/.omp/xs-parley/manager.json` and
+`keys/<fp>.key`; it watches `~/.omp/xs-parley/parleys/` to join and leave parleys, and logs every
+`spawn` in `audit/<parley_id>.jsonl`, like the sessions do. The test vectors in
+`src/xsp/vectors/` are a frozen copy of xs-parley's `doc/protocol/vectors`.
 
 [`SPEC.md`](SPEC.md) is the full specification, in French.
 

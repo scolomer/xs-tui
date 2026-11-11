@@ -15,6 +15,7 @@ mod record;
 mod ui;
 mod usage;
 mod watch;
+mod xsp;
 mod zellij;
 
 use std::collections::{BTreeMap, HashSet};
@@ -32,10 +33,21 @@ use pins::Pinned;
 use prompt::Prompt;
 use record::{Kind, Parsed, State};
 use watch::Event;
+use xsp::{Command, SpawnRequest, XspEvent};
 use zellij::Headless;
 
 const SPINNER_FRAME: Duration = Duration::from_millis(100);
 const MESSAGE_TTL: Duration = Duration::from_secs(3);
+/// Délai laissé à une session réveillée par un master pour publier son fichier xs-tui.
+const SPAWN_PUBLISH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Session reprise à la demande d'un master, en attente de son fichier publié.
+struct PendingSpawn {
+    id: u64,
+    session: String,
+    title: String,
+    started: Instant,
+}
 
 struct App {
     model: Model,
@@ -68,6 +80,10 @@ struct App {
     headless: Sender<()>,
     /// Prompt en cours de saisie, ouvert par `w` (SPEC.md § Envoi de prompt).
     prompt: Option<Prompt>,
+    /// Session-manager xs-parley, dans zellij seulement (SPEC.md § Session-manager xs-parley).
+    manager: Option<xsp::Manager>,
+    /// Réveils demandés par un master, en attente de la publication de l'instance.
+    spawns: Vec<PendingSpawn>,
 }
 
 fn main() {
@@ -79,8 +95,9 @@ fn main() {
     let omp_dir = home.join(".omp");
     let agent_dir = omp_dir.join("agent");
     let run_dir = omp_dir.join("run/xs-tui");
+    let xsp_root = xsp::root(&home);
     let (tx, rx) = mpsc::channel();
-    let watcher = match watch::start(&run_dir, &agent_dir, tx.clone()) {
+    let watcher = match watch::start(&run_dir, &agent_dir, &xsp::parleys_dir(&xsp_root), tx.clone()) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("xst: surveillance de {} impossible : {err}", run_dir.display());
@@ -93,6 +110,11 @@ fn main() {
         None => Err("xst hors zellij : arrière-plan impossible".to_string()),
         Some(_) => zellij::Plugin::install(&home.join(".cache/xst"), headless.clone())
             .map_err(|err| format!("plugin xs-tui : {err}")),
+    };
+    // Hors zellij, xst ne peut rien reprendre en arrière-plan : pas de manager.
+    let manager = match own_zellij {
+        None => Err("xst hors zellij".to_string()),
+        Some(_) => xsp::start(xsp_root, tx.clone()),
     };
     let mut app = App {
         model: Model::default(),
@@ -114,6 +136,8 @@ fn main() {
         plugin,
         headless,
         prompt: None,
+        manager: None,
+        spawns: Vec::new(),
     };
 
     let mut terminal = ratatui::init();
@@ -121,6 +145,14 @@ fn main() {
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
     watch::spawn_terminal_reader(tx);
     app.rescan();
+    match manager {
+        Ok(manager) => {
+            manager.send(Command::Reload);
+            app.manager = Some(manager);
+        }
+        Err(e) if app.own_zellij.is_some() => app.notify(format!("xs-parley : manager désactivé : {e}")),
+        Err(_) => {}
+    }
     app.load_pins();
     app.refresh_headers();
     app.request_git();
@@ -189,6 +221,9 @@ impl App {
                     Event::Notice(message) => self.notify(message),
                     Event::Headless(panes) => self.model.headless = panes,
                     Event::Resize => {}
+                    Event::Parleys => self.manager_send(Command::Reload),
+                    Event::Xsp(XspEvent::Status(status)) => self.model.manager = Some(status),
+                    Event::Xsp(XspEvent::Spawn(request)) => self.spawn(request),
                     Event::Paste(text) => {
                         if let Some(prompt) = &mut self.prompt {
                             prompt.paste(&text);
@@ -217,6 +252,7 @@ impl App {
             if fs || head || pins || headers {
                 self.request_git();
             }
+            self.expire_spawns();
             if model::any_working(&self.model, &self.rows) {
                 self.model.tick = self.model.tick.wrapping_add(1);
             }
@@ -228,13 +264,14 @@ impl App {
         }
     }
 
-    /// Délai avant le prochain réveil sans événement : frame du spinner, fin du message, ou minute
-    /// suivante pour les comptes à rebours des jauges.
+    /// Délai avant le prochain réveil sans événement : frame du spinner, fin du message, minute
+    /// suivante pour les comptes à rebours des jauges, ou fin d'attente d'une session réveillée.
     fn wake_after(&self) -> Option<Duration> {
         let spinner = model::any_working(&self.model, &self.rows).then_some(SPINNER_FRAME);
         let message = self.model.message.as_ref().map(|(_, at)| MESSAGE_TTL.saturating_sub(at.elapsed()));
         let minute = (!self.model.usage.is_empty()).then(|| Duration::from_millis(60_000 - usage::now_ms() % 60_000));
-        [spinner, message, minute].into_iter().flatten().min()
+        let spawn = self.spawns.iter().map(|s| SPAWN_PUBLISH_TIMEOUT.saturating_sub(s.started.elapsed())).min();
+        [spinner, message, minute, spawn].into_iter().flatten().min()
     }
 
     /// Fait suivre à la copie ouverte la ligne sélectionnée.
@@ -329,6 +366,13 @@ impl App {
         }
         // Une instance apparue, disparue ou déplacée : son pane a pu changer d'état.
         self.request_headless();
+        // Une session réveillée par un master a publié : il peut lui envoyer sa demande.
+        let (published, waiting): (Vec<PendingSpawn>, Vec<PendingSpawn>) =
+            std::mem::take(&mut self.spawns).into_iter().partition(|s| self.model.is_live(&s.session));
+        self.spawns = waiting;
+        for spawn in published {
+            self.manager_send(Command::Spawned { id: spawn.id, result: Ok(None) });
+        }
     }
 
     /// Demande la relecture des panes headless, dans zellij seulement.
@@ -615,10 +659,53 @@ impl App {
     /// Dossier où reprendre la session dormante `p` (`$HOME` s'il a disparu), si aucun omp ne l'a
     /// déjà ouverte.
     fn dormant_cwd<'a>(&'a self, p: &'a Pinned) -> Result<&'a Path, String> {
-        if self.model.is_live(&p.id) || pins::lease_held(&self.omp_dir, &p.id) {
+        self.resume_cwd(&p.id, &p.cwd)
+    }
+
+    /// Dossier où reprendre la session `id` ouverte dans `cwd` (`$HOME` s'il a disparu), si aucun
+    /// omp ne l'a déjà ouverte.
+    fn resume_cwd<'a>(&'a self, id: &str, cwd: &'a Path) -> Result<&'a Path, String> {
+        if self.model.is_live(id) || pins::lease_held(&self.omp_dir, id) {
             return Err("Session déjà ouverte par un autre omp".to_string());
         }
-        Ok(if p.cwd.is_dir() { &p.cwd } else { &self.home })
+        Ok(if cwd.is_dir() { cwd } else { &self.home })
+    }
+
+    fn manager_send(&self, command: Command) {
+        if let Some(manager) = &self.manager {
+            manager.send(command);
+        }
+    }
+
+    /// Réveil demandé par un master (SPEC.md § Session-manager xs-parley) : reprise headless comme
+    /// `s` ; le manager répond quand l'instance publie, ou tout de suite si rien n'est à faire.
+    fn spawn(&mut self, request: SpawnRequest) {
+        let reply = |app: &App, result| app.manager_send(Command::Spawned { id: request.id, result });
+        let Some(header) = pins::header(&self.agent_dir, &request.session) else {
+            return reply(self, Err("fichier de session introuvable".into()));
+        };
+        if self.model.is_live(&request.session) || pins::lease_held(&self.omp_dir, &request.session) {
+            return reply(self, Ok(Some("déjà ouverte".into())));
+        }
+        let resumed = self
+            .resume_cwd(&request.session, &header.cwd)
+            .and_then(|cwd| self.headless(Headless::Resume { id: &request.session, cwd }));
+        if let Err(message) = resumed {
+            return reply(self, Err(message));
+        }
+        self.notify(format!("{} réveillée par {}@{}", label(&header.title), request.from_alias, request.parley_name));
+        self.spawns.push(PendingSpawn { id: request.id, session: request.session, title: header.title, started: Instant::now() });
+    }
+
+    /// Répond en erreur pour les sessions réveillées qui n'ont pas publié à temps.
+    fn expire_spawns(&mut self) {
+        let (late, waiting): (Vec<PendingSpawn>, Vec<PendingSpawn>) =
+            std::mem::take(&mut self.spawns).into_iter().partition(|s| s.started.elapsed() >= SPAWN_PUBLISH_TIMEOUT);
+        self.spawns = waiting;
+        for spawn in late {
+            self.notify(format!("{} : réveil sans publication en 60 s", label(&spawn.title)));
+            self.manager_send(Command::Spawned { id: spawn.id, result: Err("l'instance n'a pas publié dans les 60 s".into()) });
+        }
     }
 
     /// Envoie `command` au plugin xs-tui ; sa réponse arrive plus tard (`Event::Notice`).

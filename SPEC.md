@@ -18,6 +18,8 @@ permet d'aller au pane zellij d'une instance.
 - Envoi d'un prompt à une instance, sans aller à son pane (touche `w`).
 - Filtre de la liste par correspondance floue, comme fzf (touche `f`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
+- Session-manager xs-parley : reprise headless d'une session omp qu'un master réveille depuis une
+  parley (enveloppe `spawn`).
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de commandes à omp (`/…`), affichage du détail de l'état (outil en
@@ -42,6 +44,8 @@ flowchart LR
   P -->|pane caché, ou sorti dans un onglet| Z
   Z -.->|zellij action list-panes : panes headless| T
   U["omp usage --json"] -->|fin de tour, reset, 15 min| T
+  R[relai xs-parley] <-->|WebSocket : join, spawn, response| T
+  X["~/.omp/xs-parley/parleys/*.json"] -->|notify| T
 ```
 
 omp n'expose son état d'exécution que sur le PTY de l'instance (titre OSC 0, OSC 7501) : aucun
@@ -55,6 +59,8 @@ Le dépôt contient trois composants :
   `~/.omp/agent/extensions/xs-tui -> <dépôt>/extension`, comme omp-cron et omp-q ;
 - `plugin/` : le plugin zellij xs-tui (Rust, cible `wasm32-wasip1`), compilé par `build.rs` et
   embarqué dans `xst` (voir « Sessions headless »).
+
+xst contient aussi un client xs-parley natif (`src/xsp/`) : voir « Session-manager xs-parley ».
 
 `mise run install` installe `xst` dans `~/.cargo/bin` (`cargo install`) puis l'extension ;
 `mise run extension:install` installe seulement l'extension (`bun install` et création ou mise à
@@ -399,7 +405,9 @@ Anthropic
 
 - À gauche : compteurs par état des lignes affichées, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des
   états. Les sessions dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la
-  colonne de consommation n'a pas la place de s'afficher.
+  colonne de consommation n'a pas la place de s'afficher. Dans zellij, l'état du session-manager
+  suit les compteurs : `manager : N parleys` en gris, ou `manager : <problème>` en rouge (voir
+  « Session-manager xs-parley »).
 - À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  f filtrer  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
@@ -569,6 +577,58 @@ session zellij ou hors zellij, et ne touche pas au texte en cours dans l'éditeu
   boîte de prompts : « Extension xs-tui trop ancienne dans cette instance : relancer omp ».
 - `w` sur une session dormante : « Session dormante : s pour la reprendre en arrière-plan ».
 
+### Session-manager xs-parley
+
+Dans zellij, xst est le session-manager de la machine pour xs-parley (SPEC d'xs-parley § 7.7) : un
+membre de rang `M` de chaque parley jointe par les sessions omp de la machine. Un master qui
+adresse une demande à une session hors ligne lui envoie une enveloppe `spawn` portant l'id de la
+session ; xst la reprend en headless, comme `s`, et répond par une `response`. Le master envoie
+ensuite sa demande à la session, une fois en ligne. Hors zellij, xst ne peut rien reprendre en
+arrière-plan : pas de manager, ni connexion ni identité.
+
+- Client natif Rust (`src/xsp/`) : clés `xs2`, certificats, `cert_box` (XChaCha20-Poly1305),
+  enveloppes HPKE (X25519-HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305) et signatures Ed25519
+  strictes, au format des sources TypeScript d'xs-parley. Les tests vérifient ces formats sur une
+  copie figée des vecteurs `xs-parley/doc/protocol/vectors` (`src/xsp/vectors/`), à
+  resynchroniser après `gen-vectors`.
+- Identité : `~/.omp/xs-parley/manager.json` (`{v: 1, fp, session}`, `XSP_HOME` remplace
+  `~/.omp/xs-parley`) et `keys/<fp>.key`, au format des sessions (0600, dossiers 0700, écriture
+  atomique). Créée au premier lancement : `session` est un UUID v7 tiré une fois. Une identité
+  incohérente (clé qui ne correspond pas à l'empreinte) n'est jamais écrasée : « xs-parley :
+  manager désactivé : identité du manager illisible : <chemin> ».
+- Parleys : chaque `parleys/<parley_id>.json` dont un membre porte une clé analysable ; xst
+  rejoint avec la clé answer (dérivée de la clé ask si le fichier n'en a pas d'autre), sous l'alias
+  `xst-<hôte>` (premier label du nom d'hôte, caractères hors `[A-Za-z0-9_-]` remplacés par `-`,
+  32 caractères au plus ; `xst` sans nom d'hôte) et le rôle `session-manager xst (<hôte>)`. Son
+  certificat est de rang `M`, signé par la graine answer. Le dossier `parleys/` est surveillé
+  (notify) : une parley ajoutée est rejointe, une parley retirée ou modifiée est quittée.
+- Relai : une WebSocket par endpoint (`wss://<relai>/ws`, `ws://` pour une parley `--notls`, TLS
+  rustls avec les racines du système), dans son thread, reconnectée après 1 s × 2^n (plafond
+  60 s, gigue 0-25 %). Une nouvelle paire X25519 à chaque connexion et toutes les 24 h, avec un
+  nouveau `join` ; la paire précédente déchiffre encore 10 min. Le manager ne lit ni `members` ni
+  `presence`.
+- Réception, après les contrôles de l'enveloppe (§ 5.2 d'xs-parley) et l'anti-rejeu (`msg_id`
+  vus depuis 10 min) ; chaque refus est journalisé `rejected` dans `audit/<parley_id>.jsonl` :
+  - `spawn` d'un certificat de rang autre que `A` : refusé (`spawn_from_non_master`) ;
+  - `spawn` dont le texte n'est pas un id de session : `response` `error`, « session invalide » ;
+  - `spawn` valide : journalisé `spawn_received`, puis transmis à la boucle d'xst ;
+  - `request` : `response` `error`, « session-manager : seules les enveloppes spawn sont
+    acceptées » ; les autres kinds sont seulement journalisés.
+- Reprise par xst : fichier de session introuvable → `error` « fichier de session introuvable » ;
+  session déjà ouverte (instance publiée ou bail `~/.omp/run/session-owners/<id>.lock` tenu) →
+  `ok` avec `reason` « déjà ouverte » ; sinon reprise headless (`spawn` du plugin, voir « Sessions
+  headless ») dans le dossier de la session (`$HOME` s'il a disparu) et message « “<titre>”
+  réveillée par <alias>@<parley> ». Un plugin indisponible répond `error` avec sa raison (« xst
+  hors zellij : arrière-plan impossible », « plugin xs-tui : … »).
+- Réponse : `ok` dès que l'instance publie son fichier xs-tui ; sans publication en 60 s,
+  `error` « l'instance n'a pas publié dans les 60 s » ; si xst ne traite pas la demande en 90 s,
+  le manager répond `error` « xst n'a pas répondu ». Chaque réponse est journalisée `spawned` ou
+  `spawn_failed`.
+- Barre du bas : `manager : N parleys` en gris, N comptant les parleys rejointes ou en attente de
+  connexion ; un problème la remplace en rouge : relai injoignable ou coupé (« relai <hôte> :
+  <raison> »), identité reprise par une autre connexion (autre xst avec le même `manager.json`,
+  jusqu'au prochain changement de `parleys/`), fichiers de parley illisibles.
+
 ## Risques connus
 
 - Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
@@ -591,4 +651,9 @@ session zellij ou hors zellij, et ne touche pas au texte en cours dans l'éditeu
   passage par un nouvel onglet ; chaque `zellij pipe` lui arrive une seconde fois sans contenu,
   qu'il ignore ; `open_command_pane_background` ignore le dossier demandé, que fixe le `cd` du
   script fish. Une autre version de zellij peut changer ces comportements.
+- Le session-manager n'a qu'une identité par machine : deux xst dans zellij se la disputent au
+  relai. Le dernier connecté reprend l'empreinte ; l'autre reçoit `replaced`, affiche le problème
+  et ne rejoint plus la parley jusqu'au prochain changement de `parleys/`.
+- Un porteur de la clé answer peut se déclarer manager (rang `M`) ; il ne gagne que la réception
+  des `spawn`, donc au pire un déni de réveil.
 - `spawn` crée puis ferme un onglet : il peut apparaître un instant dans la barre d'onglets.

@@ -1,0 +1,22 @@
+{
+  "description": "cert_box = base64url(nonce || XChaCha20-Poly1305(K_grp, nonce, JCS({body, sig}), aad = UTF-8(parley_id)))",
+  "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+  "k_grp": "KCND2_Xiy8xHrTlnhJKxdiPKjER6HtBtP0XjjF97Jks",
+  "nonce": "fF8QBwbLikVYDeFpSmp7VXcnHygpk-Rh",
+  "cert": {
+    "body": {
+      "v": 1,
+      "parley_id": "CZvT9oQ5Qyyla-4NhysqNg",
+      "rank": "A",
+      "sign_pub": "ddVBtpKnwJU4bDQZ7XYj16tJgbPn80A-vtkJyaU8AjM",
+      "kem_pub": "1TfPTA_CbyKHBk96jkLIDq0Wqqnk6FQJInfeakMxfn4",
+      "alias": "alice",
+      "role": "master « accès prod » 🚀",
+      "session": "019a5f3c-1b2d-7e4f-8a6b-1c2d3e4f5a6b",
+      "issued_at": "2026-11-01T10:00:00.000Z"
+    },
+    "sig": "F7132n8GdDLO5ohOWCUbRUOKw109bmPhWoIS2vMPviibENvPYOQM0ZDvzF6u18nXon5vcO1A9YP5RWC_hJqODQ"
+  },
+  "fp": "xs:tokhQumSTjTh1svZYiLzwNGj0TxKD1hR4OkdzC9ZG5s",
+  "cert_box": "fF8QBwbLikVYDeFpSmp7VXcnHygpk-Rhn-6nODgeZ4qVGgmm6LY46ZEgZJ46mjDMQJG-jo5HKN0nznLioKcSTevFmTvsdNPHC-feG06F15LuqFTCLD9Qq_JBHM-XKXL6nHQ4ByhpGVPcAunwk32Mhpkc7LmmuxjV8xQN5eLk-iu90yL-trnytkdETcoAk_TIuq3nvase2Uk6Gd_L874A8d4VeiyXO5zQ0i1qlFJJ3AuUZnJ7pVijIf8mL4BMGve4zlS35SmzeC3_YpeQB3UksbhB9k76jFuAnZObm9nRiWXNtz1q3Hl_vFYslVp0dNafpRExL18qBUwwTeowJ-b6h2UrTH0R_HcpLxl7SD9yGfW4DqSW3d-B-VF4Qxu3nZZA679rQJYSvw0t25FODZKZjih81gpItS1Sct6fRZk2_6_cR9NP_aVqnFfcnBb-6bLjsVi61PvGt1J9mUcpeOHe-OuoOnrnCAp6LJZT7zgYCSQAaLNSkHfoEiY3XXfuyDZEZeLOADlBH2BBwnCzUp3w23abh_RToMSH8_4dLvKjQPvKiSr45giWdT4Goz0eSYYQT4aXMogp0rBxIEkrRHxknOKa74X_5VE"
+}

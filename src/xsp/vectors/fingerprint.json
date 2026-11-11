@@ -1,0 +1,20 @@
+{
+  "description": "fp = 'xs:' + base64url(SHA-256(raw Ed25519 public key))",
+  "cases": [
+    {
+      "sign_seed": "ZIlvXlFTyn4Nin649y1LgeabWpM6_UvHfZvdTfzwLVk",
+      "sign_pub": "ddVBtpKnwJU4bDQZ7XYj16tJgbPn80A-vtkJyaU8AjM",
+      "fp": "xs:tokhQumSTjTh1svZYiLzwNGj0TxKD1hR4OkdzC9ZG5s"
+    },
+    {
+      "sign_seed": "XEGQ7Nh_i8gevvOUF5wW9Gsdrg9sONhvOw43e14IK24",
+      "sign_pub": "_N2w7eaUqczKC3pgsMxWShh8ROMA5halMJWhFNfc2aA",
+      "fp": "xs:kSv0_p4Ie0-XQqK0ccIBmNn_-HhIuHKl9Qn8Ix3Q0nI"
+    },
+    {
+      "sign_seed": "pbCN3M51BvaEga3aHTYeWPKOj9tntW2QmEQ3Dm9bkDA",
+      "sign_pub": "qWcHYx2YZoZeHn1SSHjoEyoYETZcb8QwxRPsVZbdV54",
+      "fp": "xs:-Ed1uMSvzIBzliaYyBXwmcwJ0MXFU9wmYI4fPaj_iQk"
+    }
+  ]
+}

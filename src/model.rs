@@ -54,6 +54,8 @@ pub struct Model {
     pub filter: String,
     /// Vrai pendant la saisie du filtre.
     pub filtering: bool,
+    /// État du session-manager xs-parley ; `None` sans manager (hors zellij).
+    pub manager: Option<crate::xsp::ManagerStatus>,
 }
 
 impl Model {
