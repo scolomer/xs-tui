@@ -20,6 +20,7 @@ permet d'aller au pane zellij d'une instance.
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Session-manager xs-parley : reprise headless d'une session omp qu'un master réveille depuis une
   parley (enveloppe `spawn`).
+- Threads Capy de l'utilisateur, mêlés aux instances omp, en affichage seulement.
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de commandes à omp (`/…`), affichage du détail de l'état (outil en
@@ -45,6 +46,7 @@ flowchart LR
   Z -.->|zellij action list-panes : panes headless| T
   U["omp usage --json"] -->|fin de tour, reset, 15 min| T
   R[relai xs-parley] <-->|WebSocket : join, spawn, response| T
+  C["API Capy (HTTPS)"] -->|threads : liste 60 s, état 10 s| T
   X["~/.omp/xs-parley/parleys/*.json"] -->|notify| T
 ```
 
@@ -264,9 +266,11 @@ son `sessionId`.
 ### Ligne d'une instance (racine)
 
 ```
-<état>  <dernier segment du cwd>   <branche> <titre>
+<état> π  <dernier segment du cwd>   <branche> <titre>
 ```
 
+- `π` bleu marque une ligne omp (racine ou session dormante), pour la distinguer d'un thread Capy
+  (voir « Ligne d'un thread Capy ») ; il est atténué avec le reste d'une instance hors de portée.
 - Le dossier est un segment powerline : ` <dossier>` sur fond coloré, suivi de `` dans
   la couleur de ce fond pour la transition. Le fond est bleu ; il est gris foncé pour une instance
   headless (voir « Sessions headless »), y compris sur le segment d'un sous-agent qui en descend.
@@ -287,13 +291,26 @@ son `sessionId`.
 ### Ligne d'une session dormante
 
 ```
-○  <dernier segment du cwd>    <branche> <titre> 󰐃
+○ π  <dernier segment du cwd>    <branche> <titre> 󰐃
 ```
 
 - `○` gris à la place de l'indicateur d'état. Le dossier est en gris, sans fond, et un espace
   remplace `` : la ligne garde la largeur d'une racine et son titre reste aligné. Le reste
   suit le format d'une racine (branche colorée, compteurs, titre, épingle grise en fin de ligne).
 - Dossier disparu (worktree supprimé) : aucun segment branche.
+
+### Ligne d'un thread Capy
+
+```
+<état>   <projet>  <titre>
+```
+
+- `` cyan (`nf-fa-cloud`) à la place du `π` des lignes omp.
+- Le projet Capy est un segment powerline à fond cyan, texte noir, sans icône ni branche : un
+  thread tourne sur une machine Capy, pas dans un dossier local.
+- Le titre est aligné sur ceux des racines ; il est en gras quand le thread a une activité non lue
+  (`hasUnreads`), comme dans la barre latérale de Capy.
+- Pas de sous-agents ni d'épingle.
 
 ### Indicateur d'état
 
@@ -303,8 +320,13 @@ son `sessionId`.
 | `idle` | `●` vert |
 | `blocked` | `●` magenta (en attente d'une approbation ou d'une réponse) |
 | `error` | `●` rouge |
+| `waiting` (thread Capy seulement : attente de la CI, d'un sous-agent, d'un minuteur) | spinner gris, trois fois plus lent |
 
-Le redessin périodique n'a lieu que tant qu'au moins un agent visible est `working`.
+Un thread Capy prend l'état omp équivalent : `working` → `working`, `idle` → `idle`, `failed` →
+`error`, et `blocked` quand Capy attend l'utilisateur (`needsYou`), quel que soit son statut.
+
+Le redessin périodique n'a lieu que tant qu'au moins un agent visible est `working` ou un thread
+Capy `waiting`.
 
 ### Ligne d'un sous-agent
 
@@ -325,12 +347,13 @@ Le redessin périodique n'a lieu que tant qu'au moins un agent visible est `work
 
 ### Ordre
 
-Les racines sont triées par `startedAt` : chaque instance garde sa position, les nouvelles
-s'ajoutent en bas. Les sous-agents suivent le même ordre sous leur parent.
+Les racines omp et les threads Capy sont triés ensemble par date de début (`startedAt` d'une
+instance, `createdAt` d'un thread) : chacun garde sa position, les nouveaux s'ajoutent en bas. Les
+sous-agents suivent le même ordre sous leur parent.
 
-Les sessions dormantes forment un bloc sous les instances, dans l'ordre de `session-pins.json`.
-Fermer un omp épinglé fait descendre sa ligne dans ce bloc ; le reprendre la fait remonter en bas
-des instances.
+Les sessions dormantes forment un bloc sous les instances et les threads, dans l'ordre de
+`session-pins.json`. Fermer un omp épinglé fait descendre sa ligne dans ce bloc ; le reprendre la
+fait remonter à sa date de début.
 
 ### Instances hors de portée
 
@@ -360,7 +383,7 @@ curseur.
   le pane est plus large que la zone. Pas d'historique.
 - Ligne de séparation : `── <titre de la session> ───`, puis à droite la taille source et celle de
   la zone (`187×57 → 120×24`) seulement quand la largeur est coupée.
-- Messages centrés grisés à la place de la copie : « Session dormante », « Ligne d'erreur »,
+- Messages centrés grisés à la place de la copie : « Session dormante », « Thread Capy », « Ligne d'erreur »,
   « Instance hors zellij », « Aucune session sélectionnée » (liste vide ; la copie reprend quand
   une instance apparaît), « zellij introuvable », « Copie interrompue : <raison> » (pane fermé,
   erreur de zellij). Après un échec, la copie ne relit plus l'écran jusqu'au prochain changement
@@ -403,11 +426,13 @@ Anthropic
 
 ### Barre du bas
 
-- À gauche : compteurs par état des lignes affichées, ex. `2 ⠹  1 ●  4 ●` avec les couleurs des
-  états. Les sessions dormantes ne sont pas comptées. Suivis de `jauges masquées` en gris quand la
-  colonne de consommation n'a pas la place de s'afficher. Dans zellij, l'état du session-manager
-  suit les compteurs : `manager : N parleys` en gris, ou `manager : <problème>` en rouge (voir
-  « Session-manager xs-parley »).
+- À gauche : compteurs par état des lignes affichées, threads Capy compris, ex. `2 ⠹  1 ⠸  1 ●  4 ●`
+  avec les couleurs des états ; un thread Capy `waiting` compte dans le compteur gris qui suit
+  celui des `working`. Les sessions dormantes ne sont pas comptées. Suivis du dernier échec de
+  relecture des threads Capy en rouge (`capy : <raison>`), puis, dans zellij, de l'état du
+  session-manager : `manager : N parleys` en gris, ou `manager : <problème>` en rouge (voir
+  « Session-manager xs-parley »), puis de `jauges masquées` en gris quand la colonne de
+  consommation n'a pas la place de s'afficher.
 - À droite : aide des touches, `↑↓/jk naviguer  ⏎ aller au pane  f filtrer  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter`.
   Elle est tronquée en premier si la largeur manque.
 - Un message temporaire remplace la barre pendant quelques secondes.
@@ -629,6 +654,26 @@ arrière-plan : pas de manager, ni connexion ni identité.
   <raison> »), identité reprise par une autre connexion (autre xst avec le même `manager.json`,
   jusqu'au prochain changement de `parleys/`), fichiers de parley illisibles.
 
+### Threads Capy
+
+xst affiche les threads [Capy](https://capy.ai) de l'utilisateur dans la liste, mêlés aux instances
+omp (voir « Ligne d'un thread Capy » et « Ordre »). Affichage seulement : `Entrée`, `w`, `s`, `D`,
+`x` et `p` sur un thread Capy affichent « Thread Capy : affichage seulement » ; `d` montre « Thread
+Capy » à la place de la copie. Le filtre `f` cherche dans le projet et le titre.
+
+- Source : l'API publique de Capy (`https://api.capy.ai/api/v1`), avec la clé de la variable
+  d'environnement `CAPY_API_KEY` (créée dans Capy, Settings → API). Sans clé, xst n'affiche aucun
+  thread et n'appelle pas l'API. Les fichiers locaux de l'app Capy (`~/.capy`) ne sont pas lus.
+- Threads affichés : ceux de l'utilisateur, non archivés : `participated` ou `member` (lancés, où
+  il a écrit ou été mentionné), `archived` faux. Le projet est son nom dans Capy.
+- Relecture, dans un thread : l'API n'a ni liste pour tout le compte ni flux pour une liste. Toutes
+  les 60 s, xst relit les projets puis toutes les pages de threads de chaque projet (100 par page,
+  8 projets en parallèle) ; entre-temps, il relit chaque thread affiché toutes les 10 s
+  (`GET /threads/{id}`). Un thread nouveau ou rejoint apparaît donc en au plus 60 s, un changement
+  d'état en au plus 10 s, et un thread archivé ou supprimé disparaît à sa relecture suivante.
+- Échec de relecture (réseau, clé refusée, `429`) : les derniers threads restent affichés et la
+  barre du bas montre l'erreur jusqu'à la relecture réussie suivante.
+
 ## Risques connus
 
 - Sur Linux, omp verrouille `session-pins.json` avec un socket Unix abstrait et non `flock` : un
@@ -657,3 +702,7 @@ arrière-plan : pas de manager, ni connexion ni identité.
 - Un porteur de la clé answer peut se déclarer manager (rang `M`) ; il ne gagne que la réception
   des `spawn`, donc au pire un déni de réveil.
 - `spawn` crée puis ferme un onglet : il peut apparaître un instant dans la barre d'onglets.
+- Les threads Capy dépendent du format de l'API publique de Capy, qui peut évoluer. La relecture
+  complète fait une requête par projet et par page de 100 threads toutes les 60 s, plus une par
+  thread affiché toutes les 10 s : une organisation avec beaucoup de projets peut atteindre la
+  limite de débit de l'API.

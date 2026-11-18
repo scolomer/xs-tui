@@ -4,17 +4,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::capy::Status;
 use crate::filter::Query;
 use crate::git::Repo;
 use crate::pins::Pinned;
 use crate::record::{Kind, Record, State, Zellij};
 
 /// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide ; une session
-/// dormante a le pid `DORMANT_PID` et son id de session.
+/// dormante a le pid `DORMANT_PID` et son id de session ; un thread Capy a le pid `CAPY_PID` et son
+/// id de thread.
 pub type Key = (i32, String);
 
 /// pid des clés de sessions dormantes : aucun process n'a le pid 0.
 pub const DORMANT_PID: i32 = 0;
+/// pid des clés de threads Capy : aucun process n'a un pid négatif.
+pub const CAPY_PID: i32 = -1;
 
 /// Id de l'agent racine d'un process omp.
 pub const ROOT_ID: &str = "Main";
@@ -56,6 +60,11 @@ pub struct Model {
     pub filtering: bool,
     /// État du session-manager xs-parley ; `None` sans manager (hors zellij).
     pub manager: Option<crate::xsp::ManagerStatus>,
+    /// Threads Capy de l'utilisateur, non archivés (SPEC.md § Threads Capy) ; gardés après un échec
+    /// de relecture.
+    pub capy: Vec<crate::capy::Thread>,
+    /// Dernier échec de relecture des threads Capy, effacé au succès suivant.
+    pub capy_error: Option<String>,
 }
 
 impl Model {
@@ -71,6 +80,14 @@ impl Model {
             Some((root, main)) if root == cwd => main.clone(),
             _ => cwd.file_name().unwrap_or(cwd.as_os_str()).to_string_lossy().into_owned(),
         }
+    }
+
+    /// Thread Capy d'une ligne Capy.
+    pub fn capy_thread(&self, key: &Key) -> Option<&crate::capy::Thread> {
+        if key.0 != CAPY_PID {
+            return None;
+        }
+        self.capy.iter().find(|t| t.id == key.1)
     }
 
     /// Texte d'une session pour le filtre, tel qu'affiché : dossier, branche et titre.
@@ -130,6 +147,8 @@ pub enum RowKind {
     Sub { show_location: bool },
     Error,
     Dormant,
+    /// Thread Capy : affichage seulement.
+    Capy,
 }
 
 #[derive(Clone, Debug)]
@@ -145,10 +164,11 @@ pub struct Row {
     pub tree: String,
 }
 
-/// Lignes à afficher. Sans filtre, dans l'ordre : racines par `startedAt`, chacune suivie de ses
-/// sous-agents, puis les sessions dormantes dans l'ordre des épingles, puis les lignes d'erreur par
-/// pid. Le filtre garde ou retire une session entière, racine et sous-agents ensemble, et trie les
-/// sessions par pertinence décroissante, les ex æquo dans l'ordre sans filtre.
+/// Lignes à afficher. Sans filtre, dans l'ordre : racines omp et threads Capy par date de début
+/// (`startedAt`, `createdAt`), chaque racine suivie de ses sous-agents, puis les sessions dormantes
+/// dans l'ordre des épingles, puis les lignes d'erreur par pid. Le filtre garde ou retire une
+/// session entière, racine et sous-agents ensemble, et trie les sessions par pertinence
+/// décroissante, les ex æquo dans l'ordre sans filtre.
 pub fn rows(m: &Model) -> Vec<Row> {
     let mut roots: Vec<&Record> = m
         .instances
@@ -158,8 +178,8 @@ pub fn rows(m: &Model) -> Vec<Row> {
     roots.sort_by(|a, b| (&a.started_at, a.pid).cmp(&(&b.started_at, b.pid)));
 
     let query = Query::new(&m.filter);
-    // Une session par groupe, avec sa pertinence.
-    let mut groups: Vec<(i64, Vec<Row>)> = Vec::new();
+    // Une session par groupe, avec sa date de début et sa pertinence.
+    let mut live: Vec<(&str, i64, Vec<Row>)> = Vec::new();
     for root in roots {
         let pid = root.pid;
         let root_key = (pid, ROOT_ID.to_string());
@@ -202,8 +222,17 @@ pub fn rows(m: &Model) -> Vec<Row> {
             }
             push_children(&mut group, pid, root, ROOT_ID, "  ", &children);
         }
-        groups.push((score, group));
+        live.push((&root.started_at, score, group));
     }
+    for t in &m.capy {
+        if let Some(score) = relevance(query.as_ref(), || format!("{} {}", t.project, t.title)) {
+            let row = Row { key: (CAPY_PID, t.id.clone()), kind: RowKind::Capy, parent: None, hidden_children: 0, tree: String::new() };
+            live.push((&t.created_at, score, vec![row]));
+        }
+    }
+    // Tri stable : deux racines omp de même date gardent l'ordre de leurs pids.
+    live.sort_by_key(|(started, _, _)| *started);
+    let mut groups: Vec<(i64, Vec<Row>)> = live.into_iter().map(|(_, score, rows)| (score, rows)).collect();
     for p in m.headers.iter().filter(|p| !m.is_live(&p.id)) {
         if let Some(score) = relevance(query.as_ref(), || m.filter_text(&p.cwd, &p.title)) {
             let row = Row {
@@ -333,7 +362,10 @@ fn reselect(m: &mut Model, before: &[Row], after: &[Row]) {
 
 /// Vrai si une ligne affichée est en cours de travail : le spinner doit être animé.
 pub fn any_working(m: &Model, rows: &[Row]) -> bool {
-    rows.iter().any(|r| m.instances.get(&r.key).is_some_and(|rec| rec.state == State::Working))
+    rows.iter().any(|r| match r.kind {
+        RowKind::Capy => m.capy_thread(&r.key).is_some_and(|t| matches!(t.status, Status::Working | Status::Waiting)),
+        _ => m.instances.get(&r.key).is_some_and(|rec| rec.state == State::Working),
+    })
 }
 
 /// Ce que montre la copie pour la ligne sélectionnée (SPEC.md § Copie de session).
@@ -349,6 +381,7 @@ pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
     match row.kind {
         RowKind::Dormant => CopySource::Message("Session dormante"),
         RowKind::Error => CopySource::Message("Ligne d'erreur"),
+        RowKind::Capy => CopySource::Message("Thread Capy"),
         RowKind::Root | RowKind::Sub { .. } => {
             match m.instances.get(&(row.key.0, ROOT_ID.to_string())).and_then(|r| r.zellij.as_ref()) {
                 Some(z) => CopySource::Pane(z),
@@ -363,7 +396,7 @@ pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
 pub fn session_of<'a>(m: &'a Model, row: &'a Row) -> Option<&'a str> {
     match row.kind {
         RowKind::Dormant => Some(row.key.1.as_str()),
-        RowKind::Error => None,
+        RowKind::Error | RowKind::Capy => None,
         RowKind::Root | RowKind::Sub { .. } => {
             m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.session_id.as_str())
         }
@@ -376,6 +409,7 @@ pub fn copy_title<'a>(m: &'a Model, row: Option<&Row>) -> Option<&'a str> {
     match row.kind {
         RowKind::Dormant => m.dormant(&row.key).map(|p| p.title.as_str()),
         RowKind::Error => None,
+        RowKind::Capy => m.capy_thread(&row.key).map(|t| t.title.as_str()),
         RowKind::Root | RowKind::Sub { .. } => {
             m.instances.get(&(row.key.0, ROOT_ID.to_string())).map(|r| r.title.as_str())
         }
@@ -463,6 +497,25 @@ mod tests {
         let rows = rows(&m);
         assert_eq!(keys(&rows), [(1, "Main")]);
         assert_eq!(rows[0].hidden_children, 2);
+    }
+
+    #[test]
+    fn capy_threads_interleave_with_omp_roots_by_start_date_and_filter_on_their_project() {
+        let mut m = model(vec![rec(1, "Main", None, "2026-11-18T10:00:00.000Z"), rec(2, "Main", None, "2026-11-18T12:00:00.000Z")]);
+        m.capy = vec![crate::capy::Thread {
+            id: "jam_1".into(),
+            project: "Selection".into(),
+            title: "Revue".into(),
+            status: Status::Working,
+            needs_you: false,
+            unread: false,
+            created_at: "2026-11-18T11:00:00.000Z".into(),
+        }];
+        m.headers = headers(&["x"]);
+        assert_eq!(keys(&rows(&m)), [(1, "Main"), (CAPY_PID, "jam_1"), (2, "Main"), (DORMANT_PID, "x")]);
+        assert!(any_working(&m, &rows(&m)));
+        m.filter = "slct".into();
+        assert_eq!(keys(&rows(&m)), [(CAPY_PID, "jam_1")]);
     }
 
     #[test]

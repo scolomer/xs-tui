@@ -39,6 +39,8 @@ pub enum Event {
     Parleys,
     /// Demande de réveil ou état du session-manager xs-parley.
     Xsp(crate::xsp::XspEvent),
+    /// Threads Capy de l'utilisateur, ou message d'erreur de relecture.
+    Capy(Result<Vec<crate::capy::Thread>, String>),
     Resize,
 }
 

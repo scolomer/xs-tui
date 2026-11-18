@@ -4,6 +4,7 @@
 //! ce binaire surveille ces fichiers, la vie des pids et les HEAD git, et redessine à chaque
 //! changement (voir SPEC.md).
 
+mod capy;
 mod filter;
 mod git;
 mod mirror;
@@ -143,6 +144,7 @@ fn main() {
     let mut terminal = ratatui::init();
     // Un texte collé arrive en un bloc : ses retours à la ligne n'envoient pas le prompt.
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
+    capy::spawn_refresher(tx.clone());
     watch::spawn_terminal_reader(tx);
     app.rescan();
     match manager {
@@ -224,6 +226,11 @@ impl App {
                     Event::Parleys => self.manager_send(Command::Reload),
                     Event::Xsp(XspEvent::Status(status)) => self.model.manager = Some(status),
                     Event::Xsp(XspEvent::Spawn(request)) => self.spawn(request),
+                    Event::Capy(Ok(threads)) => {
+                        self.model.capy = threads;
+                        self.model.capy_error = None;
+                    }
+                    Event::Capy(Err(message)) => self.model.capy_error = Some(message),
                     Event::Paste(text) => {
                         if let Some(prompt) = &mut self.prompt {
                             prompt.paste(&text);
@@ -439,6 +446,12 @@ impl App {
         if pending.is_some() && key.code != KeyCode::Char('x') {
             self.model.message = None;
         }
+        // Un thread Capy est affiché seulement : aucune action sur sa ligne.
+        let capy_row = index.is_some_and(|i| self.rows[i].kind == RowKind::Capy);
+        if capy_row && matches!(key.code, KeyCode::Enter | KeyCode::Char('w' | 's' | 'D' | 'x' | 'p')) {
+            self.notify("Thread Capy : affichage seulement".to_string());
+            return true;
+        }
         match key.code {
             KeyCode::Char('q') => return false,
             KeyCode::Char('d') => {
@@ -523,7 +536,7 @@ impl App {
             KeyCode::Char('w') => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 match row.kind {
-                    RowKind::Error => {}
+                    RowKind::Error | RowKind::Capy => {}
                     RowKind::Dormant => self.notify("Session dormante : s pour la reprendre en arrière-plan".to_string()),
                     RowKind::Root | RowKind::Sub { .. } => {
                         // Un sous-agent n'a pas d'éditeur : le prompt va à sa racine.
@@ -556,7 +569,7 @@ impl App {
             KeyCode::Char('D') => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 let message = match row.kind {
-                    RowKind::Error => return true,
+                    RowKind::Error | RowKind::Capy => return true,
                     RowKind::Dormant => "Session dormante : s pour la reprendre en arrière-plan".to_string(),
                     RowKind::Root | RowKind::Sub { .. } => {
                         // Un sous-agent partage le pane de sa racine.

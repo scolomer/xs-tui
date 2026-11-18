@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
+use crate::capy;
 use crate::filter::Query;
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
@@ -24,6 +25,10 @@ const HELP: &str =
     "↑↓/jk naviguer  ⏎ aller au pane  f filtrer  w prompt  s reprendre en fond  D passer en fond  ␣ plier  p épingler  x fermer  d détail  q quitter";
 const EMPTY: &str = "Aucune instance omp";
 const NO_MATCH: &str = "Aucune session ne correspond au filtre";
+/// Marque des lignes omp (oh-my-pi).
+const OMP_MARK: &str = "π";
+/// Marque des threads Capy : `nf-fa-cloud`.
+const CAPY_MARK: &str = "\u{f0c2}";
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;
 /// Colonnes entre la ligne la plus large de la liste et les jauges.
@@ -60,17 +65,17 @@ pub fn draw(
         }
     };
 
-    // Les titres des racines et des sessions dormantes commencent tous à la même colonne,
-    // après le plus large dossier/branche.
+    // Les titres des racines, des sessions dormantes et des threads Capy commencent tous à la même
+    // colonne, après le plus large dossier/branche ou projet.
     let title_col = rows
         .iter()
         .filter_map(|r| match r.kind {
-            RowKind::Root => m.instances.get(&r.key).map(|rec| rec.cwd.as_path()),
-            RowKind::Dormant => m.dormant(&r.key).map(|p| p.cwd.as_path()),
+            // La largeur du segment ne dépend pas de son style.
+            RowKind::Root => m.instances.get(&r.key).map(|rec| width(&location(m, &rec.cwd, Folder::Live, None))),
+            RowKind::Dormant => m.dormant(&r.key).map(|p| width(&location(m, &p.cwd, Folder::Live, None))),
+            RowKind::Capy => m.capy_thread(&r.key).map(|t| width(&project_segment(&t.project, None))),
             _ => None,
         })
-        // La largeur du segment ne dépend pas de son style.
-        .map(|cwd| width(&location(m, cwd, Folder::Live, None)))
         .max()
         .unwrap_or(0);
     let query = Query::new(&m.filter);
@@ -250,13 +255,65 @@ fn indicator(state: State, tick: usize) -> Span<'static> {
     }
 }
 
+/// Thread Capy `waiting` (CI, sous-agent, minuteur) : spinner gris, trois fois plus lent.
+fn waiting_indicator(tick: usize) -> Span<'static> {
+    Span::styled(SPINNER[tick / 3 % SPINNER.len()].to_string(), Color::DarkGray)
+}
+
+/// État omp équivalent d'un thread Capy ; `None` pour `waiting`, qui n'en a pas.
+fn capy_state(t: &capy::Thread) -> Option<State> {
+    if t.needs_you {
+        return Some(State::Blocked);
+    }
+    match t.status {
+        capy::Status::Working => Some(State::Working),
+        capy::Status::Waiting => None,
+        capy::Status::Failed => Some(State::Error),
+        capy::Status::Idle | capy::Status::Archived => Some(State::Idle),
+    }
+}
+
+/// Marque de la source d'une ligne de premier niveau : π pour omp, nuage pour Capy.
+fn source_mark(capy: bool) -> Span<'static> {
+    if capy { Span::styled(CAPY_MARK, Color::Cyan) } else { Span::styled(OMP_MARK, Color::Blue) }
+}
+
+/// Segment powerline du projet d'un thread Capy, de la largeur de son texte.
+fn project_segment<'a>(project: &'a str, query: Option<&Query>) -> Vec<Span<'a>> {
+    let style = Style::new().bg(Color::Cyan).fg(Color::Black);
+    let mut out = vec![Span::styled(" ", style)];
+    out.extend(marked(project.into(), style, query));
+    out.extend([Span::styled(" ", style), Span::styled("\u{e0b0}", Color::Cyan), Span::raw(" ")]);
+    out
+}
+
+/// `<état> <nuage> <projet> <titre>`, le titre en gras s'il a une activité non lue.
+fn capy_line<'a>(m: &Model, t: &'a capy::Thread, title_col: usize, query: Option<&Query>) -> Line<'a> {
+    let state = match capy_state(t) {
+        Some(state) => indicator(state, m.tick),
+        None => waiting_indicator(m.tick),
+    };
+    let mut spans = vec![state, Span::raw(" "), source_mark(true), Span::raw(" ")];
+    let segment = project_segment(&t.project, query);
+    let pad = (title_col + 1).saturating_sub(width(&segment));
+    spans.extend(segment);
+    spans.push(Span::raw(" ".repeat(pad)));
+    let title = if t.unread { Style::new().add_modifier(Modifier::BOLD) } else { Style::new() };
+    spans.extend(marked(t.title.as_str().into(), title, query));
+    Line::from(spans)
+}
+
 fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize, query: Option<&Query>) -> Line<'a> {
     let pid = row.key.0;
+    if row.kind == RowKind::Capy {
+        return m.capy_thread(&row.key).map_or_else(Line::default, |t| capy_line(m, t, title_col, query));
+    }
     if row.kind == RowKind::Dormant {
         let Some(p) = m.dormant(&row.key) else { return Line::default() };
-        let mut spans = vec![Span::styled("○", Color::DarkGray), Span::raw(" ")];
-        spans.extend(location(m, &p.cwd, Folder::Dormant, query));
-        let pad = (title_col + 1).saturating_sub(width(&spans[2..]));
+        let mut spans = vec![Span::styled("○", Color::DarkGray), Span::raw(" "), source_mark(false), Span::raw(" ")];
+        let location = location(m, &p.cwd, Folder::Dormant, query);
+        let pad = (title_col + 1).saturating_sub(width(&location));
+        spans.extend(location);
         spans.push(Span::raw(" ".repeat(pad)));
         spans.extend(marked(p.title.as_str().into(), Style::new(), query));
         spans.push(pin());
@@ -282,7 +339,7 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
             before.push(Span::raw(row.tree.clone()));
             (show_location, rec.state == State::Blocked)
         }
-        RowKind::Error | RowKind::Dormant => unreachable!(),
+        RowKind::Error | RowKind::Dormant | RowKind::Capy => unreachable!(),
     };
     if show_location {
         let style = if m.is_headless(own_zellij, root.zellij.as_ref()) { Folder::Headless } else { Folder::Live };
@@ -312,6 +369,10 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
     let mut spans: Vec<Span> = dimmed(before).collect();
     if show_indicator {
         spans.push(indicator(rec.state, m.tick));
+        spans.extend(dimmed(vec![Span::raw(" ")]));
+    }
+    if row.kind == RowKind::Root {
+        spans.extend(dimmed(vec![source_mark(false)]));
         spans.extend(dimmed(vec![Span::raw(" ")]));
     }
     spans.extend(dimmed(after));
@@ -395,23 +456,39 @@ fn draw_bar(frame: &mut Frame, m: &Model, rows: &[Row], area: Rect, usage_hidden
         frame.render_widget(Paragraph::new(message.as_str()).fg(Color::Yellow), area);
         return;
     }
+    // Un thread Capy compte dans l'état omp équivalent ; `waiting` a son propre compteur.
     let mut counts = [0usize; 4];
+    let mut waiting = 0;
     for row in rows {
-        if let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) {
+        if let Some(t) = m.capy_thread(&row.key) {
+            match capy_state(t) {
+                Some(state) => counts[state as usize] += 1,
+                None => waiting += 1,
+            }
+        } else if let Some(rec) = m.instances.get(&row.key).filter(|_| row.kind != RowKind::Error) {
             counts[rec.state as usize] += 1;
         }
     }
     let mut spans = Vec::new();
-    for state in [State::Working, State::Idle, State::Blocked, State::Error] {
-        let n = counts[state as usize];
-        if n == 0 {
-            continue;
-        }
+    let push = |spans: &mut Vec<Span>, span: Span<'static>| {
         if !spans.is_empty() {
             spans.push(Span::raw("  "));
         }
-        let glyph = indicator(state, m.tick);
-        spans.push(Span::styled(format!("{n} {}", glyph.content), glyph.style));
+        spans.push(span);
+    };
+    for state in [State::Working, State::Idle, State::Blocked, State::Error] {
+        let n = counts[state as usize];
+        if n > 0 {
+            let glyph = indicator(state, m.tick);
+            push(&mut spans, Span::styled(format!("{n} {}", glyph.content), glyph.style));
+        }
+        if state == State::Working && waiting > 0 {
+            let glyph = waiting_indicator(m.tick);
+            push(&mut spans, Span::styled(format!("{waiting} {}", glyph.content), glyph.style));
+        }
+    }
+    if let Some(error) = &m.capy_error {
+        push(&mut spans, Span::styled(format!("capy : {error}"), Color::Red));
     }
     if let Some(status) = &m.manager {
         if !spans.is_empty() {
