@@ -40,7 +40,8 @@ pinned session that is no longer running.
   the list, mixed with omp instances by start date: a cyan cloud and the project segment mark them,
   where omp rows carry a blue `π`. State, project and title are refreshed from Capy's API (the
   list every 60 s, each thread every 10 s), and `d` shows the thread's conversation, followed live
-  over its event stream only while it is on screen. No other action yet.
+  over its event stream only while it is on screen. `Enter` opens the thread in the Capy desktop
+  app (`capy://app/thread/<id>`).
 - **Session-manager xs-parley.** Inside zellij, xst joins every xs-parley parley
   of the machine as its session-manager (rank `M`). When a master asks a session that is offline,
   it sends xst a `spawn`: xst resumes that omp session headless, like `s`, and answers once the

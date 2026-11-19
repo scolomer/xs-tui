@@ -20,7 +20,8 @@ permet d'aller au pane zellij d'une instance.
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
 - Session-manager xs-parley : reprise headless d'une session omp qu'un master réveille depuis une
   parley (enveloppe `spawn`).
-- Threads Capy de l'utilisateur, mêlés aux instances omp, en affichage seulement.
+- Threads Capy de l'utilisateur, mêlés aux instances omp : ouverture dans l'app desktop Capy et
+  conversation en direct dans la copie `d`.
 - Plateformes : macOS et Linux.
 
 Hors périmètre v1 : envoi de commandes à omp (`/…`), affichage du détail de l'état (outil en
@@ -444,7 +445,7 @@ Anthropic
 | Touche | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
-| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous). |
+| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous) ; sur un thread Capy, l'ouvre dans l'app desktop Capy (voir « Threads Capy »). |
 | `s` | Reprendre la session dormante en headless, sans quitter xst (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
 | `w` | Saisir un prompt et l'envoyer à l'instance (à sa racine pour un sous-agent), sans quitter xst (voir « Envoi de prompt »). Sans effet sur une ligne d'erreur. |
 | `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
@@ -657,9 +658,15 @@ arrière-plan : pas de manager, ni connexion ni identité.
 ### Threads Capy
 
 xst affiche les threads [Capy](https://capy.ai) de l'utilisateur dans la liste, mêlés aux instances
-omp (voir « Ligne d'un thread Capy » et « Ordre »). `Entrée`, `w`, `s`, `D`, `x` et `p` sur un
-thread Capy affichent « Thread Capy : affichage seulement ». La copie `d` montre sa conversation
-(voir ci-dessous). Le filtre `f` cherche dans le projet et le titre.
+omp (voir « Ligne d'un thread Capy » et « Ordre »). `Entrée` ouvre le thread dans l'app desktop
+Capy ; la copie `d` montre sa conversation (voir ci-dessous) ; `w`, `s`, `D`, `x` et `p`
+affichent « Thread Capy : Entrée pour l'ouvrir dans Capy, d pour sa conversation ». Le filtre `f`
+cherche dans le projet et le titre.
+
+- Ouverture : `open capy://app/thread/<id>` (`xdg-open` sur Linux). Le schéma `capy` est celui que
+  l'app desktop déclare ; derrière `app`, elle ouvre le chemin de sa page web, ici `/thread/<id>`
+  (lu dans le code de l'app : ni l'un ni l'autre n'est documenté). Sans app installée :
+  « App Capy introuvable : lien capy:// non ouvert ».
 
 - Source : l'API publique de Capy (`https://api.capy.ai/api/v1`), avec la clé de la variable
   d'environnement `CAPY_API_KEY` (créée dans Capy, Settings → API). Sans clé, xst n'affiche aucun
