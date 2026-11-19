@@ -32,7 +32,7 @@ use ratatui::widgets::ListState;
 use mirror::Mirror;
 use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
 use pins::Pinned;
-use prompt::Prompt;
+use prompt::{Prompt, Target};
 use record::{Kind, Parsed, State};
 use watch::Event;
 use xsp::{Command, SpawnRequest, XspEvent};
@@ -466,8 +466,8 @@ impl App {
                     }
                     return true;
                 }
-                KeyCode::Char('w' | 's' | 'D' | 'x' | 'p') => {
-                    self.notify("Thread Capy : Entrée pour l'ouvrir dans Capy, d pour sa conversation".to_string());
+                KeyCode::Char('s' | 'D' | 'x' | 'p') => {
+                    self.notify("Thread Capy : w pour lui écrire, Entrée pour l'ouvrir dans Capy, d pour sa conversation".to_string());
                     return true;
                 }
                 _ => {}
@@ -557,13 +557,18 @@ impl App {
             KeyCode::Char('w') => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 match row.kind {
-                    RowKind::Error | RowKind::Capy => {}
+                    RowKind::Error => {}
+                    RowKind::Capy => {
+                        let Some(thread) = self.model.capy_thread(&row.key) else { return true };
+                        self.prompt = Some(Prompt::new(Target::Capy(thread.id.clone()), thread.title.clone()));
+                        self.model.message = None;
+                    }
                     RowKind::Dormant => self.notify("Session dormante : s pour la reprendre en arrière-plan".to_string()),
                     RowKind::Root | RowKind::Sub { .. } => {
                         // Un sous-agent n'a pas d'éditeur : le prompt va à sa racine.
                         let pid = row.key.0;
                         let Some(root) = self.model.instances.get(&(pid, ROOT_ID.to_string())) else { return true };
-                        self.prompt = Some(Prompt::new(pid, root.title.clone()));
+                        self.prompt = Some(Prompt::new(Target::Omp(pid), root.title.clone()));
                         self.model.message = None;
                     }
                 }
@@ -673,19 +678,30 @@ impl App {
         }
     }
 
-    /// Dépose le prompt saisi pour son instance ; un prompt vide ferme la saisie sans rien envoyer.
+    /// Envoie le prompt saisi à son destinataire ; un prompt vide ferme la saisie sans rien envoyer.
     fn send_prompt(&mut self, prompt: Prompt) {
         if prompt.text.trim().is_empty() {
             return;
         }
-        let message = if self.model.instances.contains_key(&(prompt.pid, ROOT_ID.to_string())) {
-            match prompt::send(&self.run_dir, prompt.pid, &prompt.text) {
-                Ok(()) if prompt.title.is_empty() => "Prompt envoyé".to_string(),
-                Ok(()) => format!("Prompt envoyé à “{}”", prompt.title),
-                Err(message) => message,
+        let sent = if prompt.title.is_empty() { "Prompt envoyé".to_string() } else { format!("Prompt envoyé à “{}”", prompt.title) };
+        let message = match &prompt.target {
+            Target::Omp(pid) if self.model.instances.contains_key(&(*pid, ROOT_ID.to_string())) => {
+                prompt::send(&self.run_dir, *pid, &prompt.text).map_or_else(|message| message, |()| sent)
             }
-        } else {
-            format!("{} fermée : prompt non envoyé", label(&prompt.title))
+            Target::Capy(id) if self.model.capy.iter().any(|t| &t.id == id) => {
+                let Some(api) = self.capy.clone() else { return };
+                // Une requête HTTP : hors de la boucle d'affichage, le résultat arrive en `Notice`.
+                let (id, text, tx) = (id.clone(), prompt.text, self.tx.clone());
+                let spawned = std::thread::Builder::new().name("capy-message".into()).spawn(move || {
+                    let result = api.send_message(&id, &text);
+                    let _ = tx.send(Event::Notice(result.map_or_else(|e| format!("Prompt non envoyé : {e}"), |()| sent)));
+                });
+                match spawned {
+                    Ok(_) => return,
+                    Err(e) => format!("Prompt non envoyé : {e}"),
+                }
+            }
+            _ => format!("{} fermée : prompt non envoyé", label(&prompt.title)),
         };
         self.notify(message);
     }

@@ -447,7 +447,7 @@ Anthropic
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
 | `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous) ; sur un thread Capy, l'ouvre dans l'app desktop Capy (voir « Threads Capy »). |
 | `s` | Reprendre la session dormante en headless, sans quitter xst (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
-| `w` | Saisir un prompt et l'envoyer à l'instance (à sa racine pour un sous-agent), sans quitter xst (voir « Envoi de prompt »). Sans effet sur une ligne d'erreur. |
+| `w` | Saisir un prompt et l'envoyer à l'instance (à sa racine pour un sous-agent) ou au thread Capy, sans quitter xst (voir « Envoi de prompt »). Sans effet sur une ligne d'erreur. |
 | `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
 | `Espace` | Plier ou déplier les sous-agents d'une racine. Sans effet sur une session dormante. |
 | `p` | Épingler ou désépingler la session de la ligne (celle de sa racine pour un sous-agent). Sur une session dormante, la désépingle sans confirmation : sa ligne disparaît. Sans effet sur une ligne d'erreur. |
@@ -602,6 +602,13 @@ session zellij ou hors zellij, et ne touche pas au texte en cours dans l'éditeu
 - Instance disparue pendant la saisie : « “<titre>” fermée : prompt non envoyé ». Instance sans
   boîte de prompts : « Extension xs-tui trop ancienne dans cette instance : relancer omp ».
 - `w` sur une session dormante : « Session dormante : s pour la reprendre en arrière-plan ».
+- `w` sur un thread Capy : même saisie, envoyée par l'API de Capy
+  (`POST /threads/{id}/message`, `{"text": …, "delivery": "steer"}`) dans un thread, sans
+  bloquer l'affichage. *Steer* est le mode par défaut de l'app Capy (le message rejoint l'agent à
+  son étape suivante, sans l'interrompre ; au repos, il lance un tour), comme `w` pour omp ; l'API
+  interrompt par défaut, d'où le mode toujours précisé. Le résultat s'affiche à la réponse :
+  « Prompt envoyé à “<titre>” », ou « Prompt non envoyé : <raison> ». Thread disparu de la liste
+  pendant la saisie : « “<titre>” fermée : prompt non envoyé ».
 
 ### Session-manager xs-parley
 
@@ -659,9 +666,9 @@ arrière-plan : pas de manager, ni connexion ni identité.
 
 xst affiche les threads [Capy](https://capy.ai) de l'utilisateur dans la liste, mêlés aux instances
 omp (voir « Ligne d'un thread Capy » et « Ordre »). `Entrée` ouvre le thread dans l'app desktop
-Capy ; la copie `d` montre sa conversation (voir ci-dessous) ; `w`, `s`, `D`, `x` et `p`
-affichent « Thread Capy : Entrée pour l'ouvrir dans Capy, d pour sa conversation ». Le filtre `f`
-cherche dans le projet et le titre.
+Capy ; `w` lui envoie un prompt (voir « Envoi de prompt ») ; la copie `d` montre sa conversation
+(voir ci-dessous) ; `s`, `D`, `x` et `p` affichent « Thread Capy : w pour lui écrire, Entrée pour
+l'ouvrir dans Capy, d pour sa conversation ». Le filtre `f` cherche dans le projet et le titre.
 
 - Ouverture : `open capy://app/thread/<id>` (`xdg-open` sur Linux). Le schéma `capy` est celui que
   l'app desktop déclare ; derrière `app`, elle ouvre le chemin de sa page web, ici `/thread/<id>`

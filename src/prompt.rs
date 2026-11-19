@@ -1,6 +1,7 @@
-//! Envoi d'un prompt à une instance avec `w` (SPEC.md § Envoi de prompt) : saisie dans la barre du
-//! bas, puis dépôt dans `~/.omp/run/xs-tui/<pid>/inbox/`, que l'extension xs-tui de l'instance
-//! surveille et transmet à omp comme un message tapé dans son éditeur.
+//! Envoi d'un prompt avec `w` (SPEC.md § Envoi de prompt) : saisie dans la barre du bas. Pour une
+//! instance omp, dépôt dans `~/.omp/run/xs-tui/<pid>/inbox/`, que l'extension xs-tui de l'instance
+//! surveille et transmet à omp comme un message tapé dans son éditeur ; pour un thread Capy, envoi
+//! par l'API de Capy (`capy::Api::send_message`).
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -12,17 +13,26 @@ const INBOX: &str = "inbox";
 /// Départage deux envois de la même microseconde, résolution de l'horloge sur macOS.
 static SENT: AtomicU64 = AtomicU64::new(0);
 
-/// Prompt en cours de saisie pour l'instance `pid`.
+/// Destinataire d'un prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// Instance omp, par son pid.
+    Omp(i32),
+    /// Thread Capy, par son id.
+    Capy(String),
+}
+
+/// Prompt en cours de saisie pour `target`.
 pub struct Prompt {
-    pub pid: i32,
-    /// Titre de la session à l'ouverture de la saisie.
+    pub target: Target,
+    /// Titre de la session ou du thread à l'ouverture de la saisie.
     pub title: String,
     pub text: String,
 }
 
 impl Prompt {
-    pub fn new(pid: i32, title: String) -> Prompt {
-        Prompt { pid, title, text: String::new() }
+    pub fn new(target: Target, title: String) -> Prompt {
+        Prompt { target, title, text: String::new() }
     }
 
     /// Ajoute un texte collé ; les fins de ligne `\r\n` et `\r` du terminal deviennent `\n`.
@@ -67,7 +77,7 @@ mod tests {
 
     #[test]
     fn paste_turns_terminal_line_endings_into_newlines() {
-        let mut prompt = Prompt::new(1, String::new());
+        let mut prompt = Prompt::new(Target::Omp(1), String::new());
         prompt.paste("a\r\nb\rc\nd");
         assert_eq!(prompt.text, "a\nb\nc\nd");
     }

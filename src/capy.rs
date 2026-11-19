@@ -139,6 +139,20 @@ impl Api {
         Ok(request.call().map_err(describe)?.into_body().into_reader())
     }
 
+    /// Envoie `text` au thread `id` comme un message tapé dans Capy : *steer*, le mode par défaut de
+    /// l'app, qui rejoint l'agent à son étape suivante sans l'interrompre. L'API, elle, interrompt
+    /// par défaut : le mode est donc toujours précisé.
+    pub fn send_message(&self, id: &str, text: &str) -> Result<(), String> {
+        let body = serde_json::json!({ "text": text, "delivery": "steer" }).to_string();
+        self.agent
+            .post(&format!("{API}/threads/{id}/message"))
+            .header("Authorization", &self.auth)
+            .header("Content-Type", "application/json")
+            .send(body.as_str())
+            .map_err(describe)?;
+        Ok(())
+    }
+
     fn projects(&self) -> Result<HashMap<String, String>, String> {
         let page: Page<Project> = self.get("/projects")?;
         Ok(page.items.into_iter().map(|p| (p.id, p.name)).collect())

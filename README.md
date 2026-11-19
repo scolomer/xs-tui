@@ -41,7 +41,8 @@ pinned session that is no longer running.
   where omp rows carry a blue `π`. State, project and title are refreshed from Capy's API (the
   list every 60 s, each thread every 10 s), and `d` shows the thread's conversation, followed live
   over its event stream only while it is on screen. `Enter` opens the thread in the Capy desktop
-  app (`capy://app/thread/<id>`).
+  app (`capy://app/thread/<id>`), and `w` sends it a prompt through the API, steering it like a
+  message typed in Capy.
 - **Session-manager xs-parley.** Inside zellij, xst joins every xs-parley parley
   of the machine as its session-manager (rank `M`). When a master asks a session that is offline,
   it sends xst a `spawn`: xst resumes that omp session headless, like `s`, and answers once the
@@ -111,7 +112,7 @@ Run `xst` in a zellij pane. It renames its tab to `xs-tui`.
 | `p` | Pin or unpin the row's session (unpinning a dormant session removes its row) |
 | `x` | Close the instance and its pane; press `x` again within 3 s to confirm |
 | `d` | Open or close the session copy |
-| `w` | Type a prompt for the instance (a subagent's goes to its root); `Enter` sends, `Alt-Enter` adds a line, `Esc` cancels |
+| `w` | Type a prompt for the instance (a subagent's goes to its root) or the Capy thread; `Enter` sends, `Alt-Enter` adds a line, `Esc` cancels |
 | `f` | Filter the list; `Enter` keeps the filter, `Esc` clears it |
 | `Esc` | Clear the filter, or close the session copy |
 | `q` / `Ctrl-C` | Quit |
