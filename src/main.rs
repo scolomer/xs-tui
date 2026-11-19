@@ -457,11 +457,21 @@ impl App {
         if pending.is_some() && key.code != KeyCode::Char('x') {
             self.model.message = None;
         }
-        // Un thread Capy est affiché seulement : aucune action sur sa ligne.
-        let capy_row = index.is_some_and(|i| self.rows[i].kind == RowKind::Capy);
-        if capy_row && matches!(key.code, KeyCode::Enter | KeyCode::Char('w' | 's' | 'D' | 'x' | 'p')) {
-            self.notify("Thread Capy : affichage seulement".to_string());
-            return true;
+        // Un thread Capy s'ouvre dans l'app desktop Capy ; les autres actions ne le concernent pas.
+        if let Some(row) = index.map(|i| &self.rows[i]).filter(|r| r.kind == RowKind::Capy) {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Err(message) = capy::open_in_app(&row.key.1) {
+                        self.notify(message);
+                    }
+                    return true;
+                }
+                KeyCode::Char('w' | 's' | 'D' | 'x' | 'p') => {
+                    self.notify("Thread Capy : Entrée pour l'ouvrir dans Capy, d pour sa conversation".to_string());
+                    return true;
+                }
+                _ => {}
+            }
         }
         match key.code {
             KeyCode::Char('q') => return false,

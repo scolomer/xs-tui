@@ -683,11 +683,13 @@ thread Capy affichent « Thread Capy : affichage seulement ». La copie `d` mont
     suivante : le flux d'un thread quitté se ferme à sa trame suivante, au plus 15 s après (Capy
     envoie un battement toutes les 15 s) ;
   - rendu, du plus ancien au plus récent, la fin de la conversation en bas : messages de
-    l'utilisateur en gras derrière `›` cyan, réponses de l'agent en texte normal, chaque entrée
-    d'outil sur une ligne grise `⏵ <outil> : <résumé>` (les commandes lancées quand l'outil n'a pas
-    de texte). Le tour en cours suit : la réponse en cours d'écriture, puis l'outil appelé, derrière
-    un spinner jaune. Une ligne vide précède chaque message et chaque réponse ; les textes sont
-    coupés à la largeur de la zone, aux espaces quand c'est possible. 200 entrées au plus sont
+    l'utilisateur dans un bandeau sur toute la largeur (fond gris très foncé, couleur 236 de la
+    palette 256, barre `▌` cyan à gauche, texte en gras, une ligne de marge au-dessus et en
+    dessous), réponses de l'agent en texte normal, chaque entrée d'outil sur une ligne grise
+    `⏵ <outil> : <résumé>` (les commandes lancées quand l'outil n'a pas de texte). Le tour en cours
+    suit : la réponse en cours d'écriture, puis l'outil appelé, derrière un spinner jaune. Une
+    ligne vide précède chaque message et chaque réponse ; les textes sont coupés à la largeur de la
+    zone, aux espaces quand c'est possible. 200 entrées au plus sont
     gardées ;
   - une réponse enregistrée remplace ses fragments, une entrée d'outil enregistrée son appel en
     cours ; les fragments restés sans entrée à la fin d'un run (tour interrompu) disparaissent ;

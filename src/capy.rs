@@ -222,6 +222,22 @@ fn encode(s: &str) -> String {
         .collect()
 }
 
+/// Ouvre le thread `id` dans l'app desktop Capy par son lien profond `capy://app/thread/<id>`, le
+/// chemin de la page du thread dans l'app (`/thread/<id>`) derrière le schéma qu'elle déclare.
+pub fn open_in_app(id: &str) -> Result<(), String> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Err(format!("Thread Capy invalide : {id}"));
+    }
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let status = std::process::Command::new(opener)
+        .arg(format!("capy://app/thread/{id}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("{opener} : {e}"))?;
+    if status.success() { Ok(()) } else { Err("App Capy introuvable : lien capy:// non ouvert".to_string()) }
+}
+
 /// Lance le thread qui relit les threads de l'utilisateur.
 pub fn spawn_refresher(api: Api, tx: Sender<Event>) {
     std::thread::Builder::new()

@@ -30,6 +30,8 @@ const NO_MATCH: &str = "Aucune session ne correspond au filtre";
 const OMP_MARK: &str = "π";
 /// Marque des threads Capy : `nf-fa-cloud`.
 const CAPY_MARK: &str = "\u{f0c2}";
+/// Fond des messages de l'utilisateur dans la conversation Capy : gris très foncé (palette 256).
+const USER_BG: Color = Color::Indexed(236);
 /// Cellules d'une barre de jauge.
 const GAUGE_CELLS: usize = 10;
 /// Colonnes entre la ligne la plus large de la liste et les jauges.
@@ -242,12 +244,19 @@ fn draw_conversation(frame: &mut Frame, c: &Conversation, tick: usize, area: Rec
     let block = |source: Source, text: &str| -> Vec<Line<'static>> {
         let mut lines = vec![Line::default()];
         match source {
+            // Bandeau sur toute la largeur : barre cyan, fond gris foncé, texte en gras, avec une
+            // ligne de marge au-dessus et en dessous du texte.
             Source::User => {
-                let style = Style::new().add_modifier(Modifier::BOLD);
-                for (i, l) in wrap(text, width.saturating_sub(2)).into_iter().enumerate() {
-                    let head = if i == 0 { Span::styled("› ", Color::Cyan) } else { Span::raw("  ") };
-                    lines.push(Line::from(vec![head, Span::styled(l, style)]));
+                let band = Style::new().bg(USER_BG);
+                let bar = Span::styled("▌ ", band.fg(Color::Cyan));
+                let pad = |used: usize| Span::styled(" ".repeat(width.saturating_sub(used)), band);
+                let margin = || Line::from(vec![bar.clone(), pad(2)]);
+                lines.push(margin());
+                for l in wrap(text, width.saturating_sub(3)) {
+                    let used = 2 + l.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
+                    lines.push(Line::from(vec![bar.clone(), Span::styled(l, band.add_modifier(Modifier::BOLD)), pad(used)]));
                 }
+                lines.push(margin());
             }
             _ => lines.extend(wrap(text, width).into_iter().map(Line::raw)),
         }
