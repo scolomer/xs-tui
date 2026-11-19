@@ -372,16 +372,18 @@ pub fn any_working(m: &Model, rows: &[Row]) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub enum CopySource<'a> {
     Pane(&'a Zellij),
+    /// Id du thread Capy dont la copie suit la conversation.
+    Capy(&'a str),
     Message(&'static str),
 }
 
 /// Source de la copie : un sous-agent montre le pane de sa racine.
-pub fn copy_source<'a>(m: &'a Model, row: Option<&Row>) -> CopySource<'a> {
+pub fn copy_source<'a>(m: &'a Model, row: Option<&'a Row>) -> CopySource<'a> {
     let Some(row) = row else { return CopySource::Message("Aucune session sélectionnée") };
     match row.kind {
         RowKind::Dormant => CopySource::Message("Session dormante"),
         RowKind::Error => CopySource::Message("Ligne d'erreur"),
-        RowKind::Capy => CopySource::Message("Thread Capy"),
+        RowKind::Capy => CopySource::Capy(row.key.1.as_str()),
         RowKind::Root | RowKind::Sub { .. } => {
             match m.instances.get(&(row.key.0, ROOT_ID.to_string())).and_then(|r| r.zellij.as_ref()) {
                 Some(z) => CopySource::Pane(z),

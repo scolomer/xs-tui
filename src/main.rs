@@ -5,6 +5,7 @@
 //! changement (voir SPEC.md).
 
 mod capy;
+mod conversation;
 mod filter;
 mod git;
 mod mirror;
@@ -83,6 +84,8 @@ struct App {
     prompt: Option<Prompt>,
     /// Session-manager xs-parley, dans zellij seulement (SPEC.md § Session-manager xs-parley).
     manager: Option<xsp::Manager>,
+    /// API Capy, si `CAPY_API_KEY` est défini : relecture des threads et conversation de la copie.
+    capy: Option<capy::Api>,
     /// Réveils demandés par un master, en attente de la publication de l'instance.
     spawns: Vec<PendingSpawn>,
 }
@@ -138,13 +141,16 @@ fn main() {
         headless,
         prompt: None,
         manager: None,
+        capy: capy::Api::from_env(),
         spawns: Vec::new(),
     };
 
     let mut terminal = ratatui::init();
     // Un texte collé arrive en un bloc : ses retours à la ligne n'envoient pas le prompt.
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
-    capy::spawn_refresher(tx.clone());
+    if let Some(api) = &app.capy {
+        capy::spawn_refresher(api.clone(), tx.clone());
+    }
     watch::spawn_terminal_reader(tx);
     app.rescan();
     match manager {
@@ -287,6 +293,11 @@ impl App {
         let row = self.model.selected.as_ref().and_then(|k| self.rows.iter().find(|r| &r.key == k));
         match model::copy_source(&self.model, row) {
             CopySource::Pane(z) => mirror.follow(&z.session, &z.pane_id),
+            // Une ligne Capy n'existe qu'avec l'API.
+            CopySource::Capy(thread) => match &self.capy {
+                Some(api) => mirror.follow_capy(api, thread),
+                None => mirror.show("Thread Capy"),
+            },
             CopySource::Message(message) => mirror.show(message),
         }
     }

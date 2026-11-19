@@ -97,25 +97,46 @@ fn keep(t: ApiThread, projects: &HashMap<String, String>) -> Option<Thread> {
     })
 }
 
-struct Client {
+/// Accès à l'API Capy avec la clé de l'utilisateur ; partagé par la relecture de la liste et la
+/// conversation de la copie `d`.
+#[derive(Clone)]
+pub struct Api {
     agent: ureq::Agent,
+    /// Sans délai global : un flux reste ouvert tant que la conversation est affichée.
+    streaming: ureq::Agent,
     auth: String,
 }
 
-impl Client {
-    fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
-        let mut response = self
-            .agent
-            .get(&format!("{API}{path}"))
-            .header("Authorization", &self.auth)
-            .call()
-            .map_err(|e| match e {
-                ureq::Error::StatusCode(404) => NOT_FOUND.to_string(),
-                ureq::Error::StatusCode(429) => "trop de requêtes".to_string(),
-                e => e.to_string(),
-            })?;
+impl Api {
+    /// `None` sans `CAPY_API_KEY` : xst n'affiche aucun thread et n'appelle pas l'API.
+    pub fn from_env() -> Option<Api> {
+        let key = std::env::var("CAPY_API_KEY").ok().filter(|k| !k.trim().is_empty())?;
+        let agent = ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).build().into();
+        let streaming =
+            ureq::Agent::config_builder().timeout_connect(Some(TIMEOUT)).timeout_recv_response(Some(TIMEOUT)).build().into();
+        Some(Api { agent, streaming, auth: format!("Bearer {}", key.trim()) })
+    }
+
+    pub fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let mut response =
+            self.agent.get(&format!("{API}{path}")).header("Authorization", &self.auth).call().map_err(describe)?;
         let body = response.body_mut().read_to_string().map_err(|e| format!("réponse illisible : {e}"))?;
         serde_json::from_str(&body).map_err(|e| format!("réponse illisible : {e}"))
+    }
+
+    /// Ouvre le flux Server-Sent Events `path`, repris après l'événement `after` ; sans compression,
+    /// pour recevoir chaque trame dès qu'elle part.
+    pub fn stream(&self, path: &str, after: Option<&str>) -> Result<impl std::io::Read + use<>, String> {
+        let mut request = self
+            .streaming
+            .get(&format!("{API}{path}"))
+            .header("Authorization", &self.auth)
+            .header("Accept", "text/event-stream")
+            .header("Accept-Encoding", "identity");
+        if let Some(id) = after {
+            request = request.header("Last-Event-ID", id);
+        }
+        Ok(request.call().map_err(describe)?.into_body().into_reader())
     }
 
     fn projects(&self) -> Result<HashMap<String, String>, String> {
@@ -181,6 +202,16 @@ impl Client {
     }
 }
 
+/// Message d'une erreur de l'API, pour la barre du bas ou la copie.
+fn describe(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::StatusCode(401) => "clé CAPY_API_KEY refusée".to_string(),
+        ureq::Error::StatusCode(404) => NOT_FOUND.to_string(),
+        ureq::Error::StatusCode(429) => "trop de requêtes".to_string(),
+        e => e.to_string(),
+    }
+}
+
 /// Encodage pour un paramètre d'URL : tout sauf `[A-Za-z0-9_.~-]`.
 fn encode(s: &str) -> String {
     s.bytes()
@@ -191,18 +222,15 @@ fn encode(s: &str) -> String {
         .collect()
 }
 
-/// Lance le thread de relecture si `CAPY_API_KEY` est défini ; sans clé, rien.
-pub fn spawn_refresher(tx: Sender<Event>) {
-    let Some(key) = std::env::var("CAPY_API_KEY").ok().filter(|k| !k.trim().is_empty()) else { return };
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).build().into();
-    let client = Client { agent, auth: format!("Bearer {}", key.trim()) };
+/// Lance le thread qui relit les threads de l'utilisateur.
+pub fn spawn_refresher(api: Api, tx: Sender<Event>) {
     std::thread::Builder::new()
         .name("capy".into())
-        .spawn(move || refresh_loop(&client, &tx))
+        .spawn(move || refresh_loop(&api, &tx))
         .expect("thread Capy");
 }
 
-fn refresh_loop(client: &Client, tx: &Sender<Event>) {
+fn refresh_loop(client: &Api, tx: &Sender<Event>) {
     let mut projects = HashMap::new();
     let mut threads: Vec<Thread> = Vec::new();
     let mut scanned: Option<Instant> = None;

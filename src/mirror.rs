@@ -1,6 +1,7 @@
-//! Copie d'un pane zellij (SPEC.md § Copie de session) : un thread relit l'écran visible du pane
-//! avec `zellij action dump-screen --ansi` toutes les `POLL`, et l'envoie converti en texte
-//! ratatui quand il a changé.
+//! Copie de la ligne sélectionnée (SPEC.md § Copie de session). Pour une instance omp, un thread
+//! relit l'écran visible du pane avec `zellij action dump-screen --ansi` toutes les `POLL`, et
+//! l'envoie converti en texte ratatui quand il a changé. Pour un thread Capy, un thread suit sa
+//! conversation (`conversation.rs`).
 //!
 //! Relecture à intervalle fixe : `zellij subscribe` ne diffuse rien pour un pane dont l'onglet n'est
 //! pas affiché, puisque zellij ne le redessine pas.
@@ -14,6 +15,8 @@ use std::time::Duration;
 use ansi_to_tui::IntoText;
 use ratatui::text::Text;
 
+use crate::capy::Api;
+use crate::conversation::{self, Conversation};
 use crate::watch::Event;
 
 /// Intervalle entre deux relectures de l'écran copié.
@@ -24,20 +27,30 @@ pub enum View {
     /// Copie lancée, premier écran pas encore lu.
     Waiting,
     Screen(Text<'static>),
+    Conversation(Conversation),
     Message(String),
 }
 
 /// Ce que le thread de copie envoie à la boucle principale.
 pub enum Update {
     Screen(Text<'static>),
+    Conversation(Conversation),
     /// Fin de la copie, avec le message à afficher.
     Failed(String),
 }
 
+/// Ce que suit la copie.
+#[derive(PartialEq, Eq)]
+enum Target {
+    /// (session zellij, id du pane).
+    Pane(String, String),
+    /// Id du thread Capy.
+    Capy(String),
+}
+
 pub struct Mirror {
-    /// Pane copié : (session zellij, id du pane). Gardé après un échec pour ne pas relancer la
-    /// copie avant que la cible change.
-    target: Option<(String, String)>,
+    /// Cible copiée. Gardée après un échec pour ne pas relancer la copie avant que la cible change.
+    target: Option<Target>,
     /// Arrête le thread de la copie en cours.
     stop: Arc<AtomicBool>,
     /// Numéro de la copie en cours : les mises à jour d'une copie remplacée sont ignorées.
@@ -53,19 +66,34 @@ impl Mirror {
 
     /// Copie le pane `pane_id` de la session zellij `session` ; rien si c'est déjà la cible.
     pub fn follow(&mut self, session: &str, pane_id: &str) {
-        if self.target.as_ref().is_some_and(|(s, p)| s == session && p == pane_id) {
+        let target = Target::Pane(session.to_string(), pane_id.to_string());
+        let (session, pane) = (session.to_string(), format!("terminal_{pane_id}"));
+        self.start(target, "zellij-dump-screen", move |stop, generation, tx| poll(&session, &pane, &stop, generation, &tx));
+    }
+
+    /// Suit la conversation du thread Capy `thread` ; rien si c'est déjà la cible. Le flux se ferme
+    /// quand la cible change ou que la copie est fermée.
+    pub fn follow_capy(&mut self, api: &Api, thread: &str) {
+        let (api, id) = (api.clone(), thread.to_string());
+        self.start(Target::Capy(id.clone()), "capy-stream", move |stop, generation, tx| {
+            conversation::follow(&api, &id, &stop, generation, &tx)
+        });
+    }
+
+    /// Arrête la copie en cours et lance `run` dans un thread pour `target`.
+    fn start<F>(&mut self, target: Target, name: &str, run: F)
+    where
+        F: FnOnce(Arc<AtomicBool>, u64, Sender<Event>) + Send + 'static,
+    {
+        if self.target.as_ref() == Some(&target) {
             return;
         }
         self.stop.store(true, Ordering::Relaxed);
         self.stop = Arc::new(AtomicBool::new(false));
-        self.target = Some((session.to_string(), pane_id.to_string()));
+        self.target = Some(target);
         self.generation += 1;
-        let (session, pane, stop, generation, tx) =
-            (session.to_string(), format!("terminal_{pane_id}"), self.stop.clone(), self.generation, self.tx.clone());
-        self.view = match std::thread::Builder::new()
-            .name("zellij-dump-screen".into())
-            .spawn(move || poll(&session, &pane, &stop, generation, &tx))
-        {
+        let (stop, generation, tx) = (self.stop.clone(), self.generation, self.tx.clone());
+        self.view = match std::thread::Builder::new().name(name.into()).spawn(move || run(stop, generation, tx)) {
             Ok(_) => View::Waiting,
             Err(err) => View::Message(format!("Copie interrompue : {err}")),
         };
@@ -86,6 +114,7 @@ impl Mirror {
         }
         self.view = match update {
             Update::Screen(text) => View::Screen(text),
+            Update::Conversation(conversation) => View::Conversation(conversation),
             Update::Failed(message) => View::Message(message),
         };
     }

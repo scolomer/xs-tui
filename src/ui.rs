@@ -12,6 +12,7 @@ use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
 use crate::capy;
+use crate::conversation::{Conversation, Source};
 use crate::filter::Query;
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
@@ -194,7 +195,8 @@ fn countdown(ms: u64) -> String {
     }
 }
 
-/// Ligne de séparation puis écran visible du pane copié, coupé en haut et à droite.
+/// Ligne de séparation puis écran visible du pane copié, coupé en haut et à droite, ou conversation
+/// du thread Capy.
 fn draw_copy(frame: &mut Frame, m: &Model, rows: &[Row], mirror: &Mirror, separator_area: Rect, area: Rect) {
     let row = m.selected.as_ref().and_then(|k| rows.iter().find(|r| &r.key == k));
     let crop = match &mirror.view {
@@ -208,6 +210,7 @@ fn draw_copy(frame: &mut Frame, m: &Model, rows: &[Row], mirror: &Mirror, separa
     match &mirror.view {
         View::Waiting => {}
         View::Message(message) => centered(frame, message, area),
+        View::Conversation(conversation) => draw_conversation(frame, conversation, m.tick, area),
         View::Screen(text) => {
             // omp écrit de haut en bas et termine par son éditeur et son statut, sans forcément
             // remplir l'écran : on garde les dernières lignes non vides.
@@ -223,6 +226,94 @@ fn draw_copy(frame: &mut Frame, m: &Model, rows: &[Row], mirror: &Mirror, separa
             }
         }
     }
+}
+
+/// Fin de la conversation d'un thread Capy, retours à la ligne à la largeur de `area` : messages de
+/// l'utilisateur en gras derrière `›`, réponses en texte normal, outils sur une ligne grise, puis le
+/// tour en cours (réponse en écriture, outil appelé).
+fn draw_conversation(frame: &mut Frame, c: &Conversation, tick: usize, area: Rect) {
+    let width = usize::from(area.width);
+    let height = usize::from(area.height);
+    let tool_line = |prefix: Span<'static>, tool: &str, text: &str| {
+        let first = text.lines().next().unwrap_or_default();
+        let summary = if first.is_empty() { tool.to_string() } else { format!("{tool} : {first}") };
+        vec![Line::from(vec![prefix, Span::raw(summary).fg(Color::DarkGray)])]
+    };
+    let block = |source: Source, text: &str| -> Vec<Line<'static>> {
+        let mut lines = vec![Line::default()];
+        match source {
+            Source::User => {
+                let style = Style::new().add_modifier(Modifier::BOLD);
+                for (i, l) in wrap(text, width.saturating_sub(2)).into_iter().enumerate() {
+                    let head = if i == 0 { Span::styled("› ", Color::Cyan) } else { Span::raw("  ") };
+                    lines.push(Line::from(vec![head, Span::styled(l, style)]));
+                }
+            }
+            _ => lines.extend(wrap(text, width).into_iter().map(Line::raw)),
+        }
+        lines
+    };
+    // Blocs du plus récent au plus ancien, jusqu'à remplir la zone.
+    let mut blocks: Vec<Vec<Line>> = Vec::new();
+    if let Some((_, name, text)) = &c.tool_call {
+        blocks.push(tool_line(Span::styled(format!("{} ", SPINNER[tick % SPINNER.len()]), Color::Yellow), name, text));
+    }
+    blocks.extend(c.live.iter().rev().map(|(_, text)| block(Source::Assistant, text)));
+    let mut used: usize = blocks.iter().map(Vec::len).sum();
+    for entry in c.entries.iter().rev() {
+        if used >= height {
+            break;
+        }
+        let lines = match entry.source {
+            Source::Tool => tool_line(Span::raw("⏵ ").fg(Color::DarkGray), entry.tool.as_deref().unwrap_or("outil"), &entry.text),
+            source => block(source, &entry.text),
+        };
+        used += lines.len();
+        blocks.push(lines);
+    }
+    let lines: Vec<Line> = blocks.into_iter().rev().flatten().collect();
+    let skip = lines.len().saturating_sub(height);
+    let buf = frame.buffer_mut();
+    for (y, line) in (area.y..area.bottom()).zip(lines.iter().skip(skip)) {
+        buf.set_line(area.x, y, line, area.width);
+    }
+}
+
+/// `text` coupé en lignes de `width` colonnes au plus, aux espaces quand c'est possible ; les
+/// tabulations deviennent des espaces et les autres caractères de contrôle disparaissent.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let mut line = String::new();
+        let mut used = 0;
+        for word in raw.split(' ') {
+            let word: String = word.chars().filter_map(|c| if c == '\t' { Some(' ') } else { (!c.is_control()).then_some(c) }).collect();
+            let w: usize = word.chars().map(|c| c.width().unwrap_or(0)).sum();
+            if used > 0 && used + 1 + w <= width {
+                line.push(' ');
+                line.push_str(&word);
+                used += 1 + w;
+                continue;
+            }
+            if used > 0 {
+                out.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            // Un mot plus large que la ligne est coupé n'importe où.
+            for c in word.chars() {
+                let cw = c.width().unwrap_or(0);
+                if used + cw > width {
+                    out.push(std::mem::take(&mut line));
+                    used = 0;
+                }
+                line.push(c);
+                used += cw;
+            }
+        }
+        out.push(line);
+    }
+    out
 }
 
 /// `── <titre> ──────── <taille source → zone> ──`, la taille seulement si la largeur est coupée.
@@ -550,5 +641,17 @@ fn shown(c: char) -> char {
         '\n' => '↵',
         c if c.is_control() => ' ',
         c => c,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_breaks_at_spaces_and_splits_words_wider_than_the_line() {
+        assert_eq!(wrap("Tests pass. PR is up.", 11), ["Tests pass.", "PR is up."]);
+        assert_eq!(wrap("abcdefgh ij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap("a\n\nb\tc", 10), ["a", "", "b c"]);
     }
 }

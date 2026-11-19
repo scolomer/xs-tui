@@ -370,7 +370,7 @@ Avec un filtre qui ne garde aucune ligne : « Aucune session ne correspond au fi
 `d` sépare l'écran en deux : la liste en haut, à la hauteur de ses lignes (au plus un tiers de
 l'écran, elle défile au-delà), puis une ligne vide, une ligne de séparation et la copie de l'écran
 d'omp, sur toute la largeur, jusqu'à la barre du bas. La copie est en lecture seule et suit le
-curseur.
+curseur. Sur un thread Capy, elle montre sa conversation (voir « Threads Capy »).
 
 - Source : l'écran visible du pane zellij de l'instance sélectionnée, relu par
   `zellij --session <session> action dump-screen --pane-id terminal_<paneId> --ansi` toutes les
@@ -383,7 +383,7 @@ curseur.
   le pane est plus large que la zone. Pas d'historique.
 - Ligne de séparation : `── <titre de la session> ───`, puis à droite la taille source et celle de
   la zone (`187×57 → 120×24`) seulement quand la largeur est coupée.
-- Messages centrés grisés à la place de la copie : « Session dormante », « Thread Capy », « Ligne d'erreur »,
+- Messages centrés grisés à la place de la copie : « Session dormante », « Ligne d'erreur »,
   « Instance hors zellij », « Aucune session sélectionnée » (liste vide ; la copie reprend quand
   une instance apparaît), « zellij introuvable », « Copie interrompue : <raison> » (pane fermé,
   erreur de zellij). Après un échec, la copie ne relit plus l'écran jusqu'au prochain changement
@@ -657,9 +657,9 @@ arrière-plan : pas de manager, ni connexion ni identité.
 ### Threads Capy
 
 xst affiche les threads [Capy](https://capy.ai) de l'utilisateur dans la liste, mêlés aux instances
-omp (voir « Ligne d'un thread Capy » et « Ordre »). Affichage seulement : `Entrée`, `w`, `s`, `D`,
-`x` et `p` sur un thread Capy affichent « Thread Capy : affichage seulement » ; `d` montre « Thread
-Capy » à la place de la copie. Le filtre `f` cherche dans le projet et le titre.
+omp (voir « Ligne d'un thread Capy » et « Ordre »). `Entrée`, `w`, `s`, `D`, `x` et `p` sur un
+thread Capy affichent « Thread Capy : affichage seulement ». La copie `d` montre sa conversation
+(voir ci-dessous). Le filtre `f` cherche dans le projet et le titre.
 
 - Source : l'API publique de Capy (`https://api.capy.ai/api/v1`), avec la clé de la variable
   d'environnement `CAPY_API_KEY` (créée dans Capy, Settings → API). Sans clé, xst n'affiche aucun
@@ -673,6 +673,27 @@ Capy » à la place de la copie. Le filtre `f` cherche dans le projet et le titr
   d'état en au plus 10 s, et un thread archivé ou supprimé disparaît à sa relecture suivante.
 - Échec de relecture (réseau, clé refusée, `429`) : les derniers threads restent affichés et la
   barre du bas montre l'erreur jusqu'à la relecture réussie suivante.
+- Conversation dans la copie `d`, quand le curseur est sur un thread Capy :
+  - au premier affichage, xst lit la dernière page de la conversation
+    (`GET /threads/{id}/messages?before=<plus grand id>&limit=50`), puis ouvre le flux du thread
+    (`GET /threads/{id}/stream`, Server-Sent Events) à partir du dernier id d'événement lu, pour ne
+    pas rejouer tout l'historique. Les entrées que le flux rejoue remplacent celles de même id ;
+  - un seul flux à la fois, ouvert seulement tant que la copie montre ce thread : changer de ligne,
+    fermer la copie (`d`, `Échap`) ou quitter xst l'arrête. La lecture bloque jusqu'à la trame
+    suivante : le flux d'un thread quitté se ferme à sa trame suivante, au plus 15 s après (Capy
+    envoie un battement toutes les 15 s) ;
+  - rendu, du plus ancien au plus récent, la fin de la conversation en bas : messages de
+    l'utilisateur en gras derrière `›` cyan, réponses de l'agent en texte normal, chaque entrée
+    d'outil sur une ligne grise `⏵ <outil> : <résumé>` (les commandes lancées quand l'outil n'a pas
+    de texte). Le tour en cours suit : la réponse en cours d'écriture, puis l'outil appelé, derrière
+    un spinner jaune. Une ligne vide précède chaque message et chaque réponse ; les textes sont
+    coupés à la largeur de la zone, aux espaces quand c'est possible. 200 entrées au plus sont
+    gardées ;
+  - une réponse enregistrée remplace ses fragments, une entrée d'outil enregistrée son appel en
+    cours ; les fragments restés sans entrée à la fin d'un run (tour interrompu) disparaissent ;
+  - coupure sans trame de fin : reprise 2 s plus tard, après le dernier id d'événement lu. Clé
+    refusée, thread introuvable ou trame `error` : « Flux interrompu : <raison> » à la place de la
+    conversation, sans nouvelle tentative jusqu'au prochain changement de ligne.
 
 ## Risques connus
 
@@ -705,4 +726,6 @@ Capy » à la place de la copie. Le filtre `f` cherche dans le projet et le titr
 - Les threads Capy dépendent du format de l'API publique de Capy, qui peut évoluer. La relecture
   complète fait une requête par projet et par page de 100 threads toutes les 60 s, plus une par
   thread affiché toutes les 10 s : une organisation avec beaucoup de projets peut atteindre la
-  limite de débit de l'API.
+  limite de débit de l'API. Capy limite aussi les flux ouverts par clé : avec la copie ouverte,
+  parcourir vite plusieurs threads Capy peut laisser jusqu'à 15 s quelques flux en cours de
+  fermeture.
