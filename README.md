@@ -36,8 +36,9 @@ pinned session that is no longer running.
   branch, title and subagents, matched letters underlined.
 - **Usage gauges.** A column right of the list shows your Anthropic and OpenAI subscription
   windows, like omp's `/usage`: percentage used and time to reset, colored by omp's status.
-- **Capy threads.** With `CAPY_API_KEY` set, your unarchived [Capy](https://capy.ai) threads join
-  the list, mixed with omp instances by start date: a cyan cloud and the project segment mark them,
+- **Capy threads.** With `CAPY_API_KEY` set, your unarchived [Capy](https://capy.ai) threads that
+  are not settled (idle, read, nothing asked of you) join the list, mixed with omp instances by
+  start date: a cyan cloud and the project segment mark them,
   where omp rows carry a blue `π`. State, project and title are refreshed from Capy's API (the
   list every 60 s, each thread every 10 s), and `d` shows the thread's conversation, followed live
   over its event stream only while it is on screen. `Enter` opens the thread in the Capy desktop

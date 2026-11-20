@@ -224,7 +224,8 @@ pub fn rows(m: &Model) -> Vec<Row> {
         }
         live.push((&root.started_at, score, group));
     }
-    for t in &m.capy {
+    // Un thread réglé n'est pas affiché, mais reste suivi : il réapparaît dès qu'il bouge.
+    for t in m.capy.iter().filter(|t| !t.settled()) {
         if let Some(score) = relevance(query.as_ref(), || format!("{} {}", t.project, t.title)) {
             let row = Row { key: (CAPY_PID, t.id.clone()), kind: RowKind::Capy, parent: None, hidden_children: 0, tree: String::new() };
             live.push((&t.created_at, score, vec![row]));
@@ -518,6 +519,30 @@ mod tests {
         assert!(any_working(&m, &rows(&m)));
         m.filter = "slct".into();
         assert_eq!(keys(&rows(&m)), [(CAPY_PID, "jam_1")]);
+    }
+
+    #[test]
+    fn settled_capy_threads_are_hidden_until_they_need_attention_again() {
+        let thread = |id: &str, status, needs_you, unread| crate::capy::Thread {
+            id: id.into(),
+            project: "p".into(),
+            title: "t".into(),
+            status,
+            needs_you,
+            unread,
+            created_at: id.into(),
+        };
+        let m = Model {
+            capy: vec![
+                thread("a", Status::Idle, false, false),
+                thread("b", Status::Idle, false, true),
+                thread("c", Status::Idle, true, false),
+                thread("d", Status::Failed, false, false),
+                thread("e", Status::Waiting, false, false),
+            ],
+            ..Model::default()
+        };
+        assert_eq!(keys(&rows(&m)), [(CAPY_PID, "b"), (CAPY_PID, "c"), (CAPY_PID, "d"), (CAPY_PID, "e")]);
     }
 
     #[test]

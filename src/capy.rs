@@ -33,7 +33,7 @@ pub enum Status {
     Archived,
 }
 
-/// Thread affiché : seulement ceux de l'utilisateur, non archivés.
+/// Thread de l'utilisateur, non archivé ; la liste n'en montre que ceux qui ne sont pas réglés.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Thread {
     pub id: String,
@@ -46,6 +46,14 @@ pub struct Thread {
     pub unread: bool,
     /// Création, au format ISO 8601 comme `startedAt` des instances omp : sert à l'ordre.
     pub created_at: String,
+}
+
+impl Thread {
+    /// Réglé : au repos (`idle`), lu, et sans demande en attente de l'utilisateur. Un thread en
+    /// cours, en attente, en échec, non lu ou qui attend l'utilisateur reste affiché.
+    pub fn settled(&self) -> bool {
+        self.status == Status::Idle && !self.unread && !self.needs_you
+    }
 }
 
 #[derive(Deserialize)]

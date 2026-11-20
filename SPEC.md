@@ -678,8 +678,14 @@ l'ouvrir dans Capy, d pour sa conversation ». Le filtre `f` cherche dans le pro
 - Source : l'API publique de Capy (`https://api.capy.ai/api/v1`), avec la clé de la variable
   d'environnement `CAPY_API_KEY` (créée dans Capy, Settings → API). Sans clé, xst n'affiche aucun
   thread et n'appelle pas l'API. Les fichiers locaux de l'app Capy (`~/.capy`) ne sont pas lus.
-- Threads affichés : ceux de l'utilisateur, non archivés : `participated` ou `member` (lancés, où
+- Threads suivis : ceux de l'utilisateur, non archivés : `participated` ou `member` (lancés, où
   il a écrit ou été mentionné), `archived` faux. Le projet est son nom dans Capy.
+- Threads affichés : les threads suivis qui ne sont pas réglés. Un thread est réglé quand il est
+  au repos (`idle`), lu (`hasUnreads` faux) et que Capy n'attend rien de l'utilisateur
+  (`needsYou` faux). Il reste suivi (relu toutes les 10 s) et réapparaît dès qu'il travaille,
+  attend, échoue, a une activité non lue ou une demande. L'app Capy a sa propre section
+  « Settled » (marquage manuel, PR mergées, 7 jours sans activité) que l'API publique ne donne
+  pas : la règle d'xst est plus large et ne s'appuie que sur l'état du thread.
 - Relecture, dans un thread : l'API n'a ni liste pour tout le compte ni flux pour une liste. Toutes
   les 60 s, xst relit les projets puis toutes les pages de threads de chaque projet (100 par page,
   8 projets en parallèle) ; entre-temps, il relit chaque thread affiché toutes les 10 s
