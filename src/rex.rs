@@ -46,14 +46,20 @@ fn api(server: Option<&str>, method: &str, args: &Value) -> Result<Value, String
     serde_json::from_slice(&out).map_err(|err| format!("rex {method} : {err}"))
 }
 
-/// Focalise le block `target`, puis fait passer chaque app connectée à sa session : rien ne dit
-/// laquelle elle affiche (`session_ids` d'un client liste toutes celles qu'il suit).
+/// Focalise le block `target` et fait afficher sa fenêtre par les apps.
 pub fn focus(target: &Rex) -> Result<(), String> {
     let server = target.server.as_deref();
     api(server, "session.focus_block", &json!({ "session_id": target.session, "block_id": target.block }))?;
-    let select = format!("session_id={}", target.session);
+    let window = window_of(server, &target.session, &target.block)?;
+    show_window(server, &target.session, &window)
+}
+
+/// Fait afficher la session `session` et sa fenêtre `window` à chaque app connectée : une app
+/// choisit seule la fenêtre qu'elle montre, sans suivre la fenêtre active du serveur.
+fn show_window(server: Option<&str>, session: &str, window: &str) -> Result<(), String> {
+    let args = json!({ "session_id": session, "window_id": window }).to_string();
     for app in apps(server)? {
-        output(command(server).args(["-C", &app, "do", "session.select", &select])).map_err(|err| {
+        output(command(server).args(["-C", &app, "do", "session.select", "--args", &args])).map_err(|err| {
             if err.contains("Remote Control") {
                 "Rex.app ne change de session qu'avec Remote Control (réglages, Rex Server)".to_string()
             } else {
@@ -103,12 +109,14 @@ fn close_block(server: Option<&str>, session: &str, block: &str) -> Result<(), S
     output(command(server).args(["block", "close", "-s", session, block])).map(drop)
 }
 
-/// Ouvre `script` (fish) dans `cwd`, dans une nouvelle fenêtre de la session de `own`, qui devient
-/// la fenêtre active.
+/// Ouvre `script` (fish) dans `cwd`, dans une nouvelle fenêtre de la session de `own`, affichée par
+/// les apps.
 pub fn resume(own: &Rex, script: &str, cwd: &Path) -> Result<(), String> {
+    let server = own.server.as_deref();
     let block = json!({ "flavor": TERMINAL, "options": terminal(script, cwd) });
-    api(own.server.as_deref(), "session.new_window", &json!({ "session_id": own.session, "layout": { "block": block } }))
-        .map(drop)
+    let created = api(server, "session.new_window", &json!({ "session_id": own.session, "layout": { "block": block } }))?;
+    let window = created["window_id"].as_str().ok_or("rex : fenêtre créée sans id")?;
+    show_window(server, &own.session, window)
 }
 
 /// Lance `script` (fish) dans `cwd`, dans un block détaché de la session de `own`, de taille
@@ -212,13 +220,18 @@ fn last_lines(capture: &[u8], n: usize) -> Vec<u8> {
 /// Donne le nom `name` à la fenêtre du block `own`.
 pub fn rename_window_of(own: &Rex, name: &str) -> Result<(), String> {
     let server = own.server.as_deref();
-    let window = blocks(server, &own.session)?
-        .into_iter()
-        .find(|b| b.block_id == own.block)
-        .and_then(|b| b.window_id)
-        .ok_or_else(|| format!("rex : block {} hors fenêtre", own.block))?;
+    let window = window_of(server, &own.session, &own.block)?;
     let args = json!({ "session_id": own.session, "window_id": window, "label": name });
     api(server, "session.set_window_label", &args).map(drop)
+}
+
+/// Fenêtre du block `block`.
+fn window_of(server: Option<&str>, session: &str, block: &str) -> Result<String, String> {
+    blocks(server, session)?
+        .into_iter()
+        .find(|b| b.block_id == block)
+        .and_then(|b| b.window_id)
+        .ok_or_else(|| format!("rex : block {block} hors fenêtre"))
 }
 
 #[cfg(test)]

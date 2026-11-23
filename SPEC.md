@@ -567,13 +567,15 @@ passe que par la CLI, toujours avec `--autostart=false` (une commande ne démarr
 absent) et `-S <server>` quand l'instance a publié le sien. Où tourne xst : zellij si
 `ZELLIJ_SESSION_NAME` est défini, sinon rex si `REX_SESSION` et `REX_BLOCK` le sont.
 
-- Entrée : `session.focus_block` (la fenêtre du block devient active), puis
-  `rex -C <app> do session.select session_id=<session>` pour chaque app connectée : aucune API ne
-  dit quelle session une app affiche. Sans Remote Control activé dans les réglages de Rex.app
-  (Rex Server), l'app refuse : « Rex.app ne change de session qu'avec Remote Control (réglages,
-  Rex Server) », le block restant focalisé dans sa session.
+- Entrée : `session.focus_block`, puis
+  `rex -C <app> do session.select --args '{"session_id": …, "window_id": <fenêtre du block>}'`
+  pour chaque app connectée : une app choisit seule la fenêtre qu'elle montre, sans suivre la
+  fenêtre active du serveur, et aucune API ne dit laquelle elle affiche. Sans Remote Control
+  activé dans les réglages de Rex.app (Rex Server), l'app refuse : « Rex.app ne change de session
+  qu'avec Remote Control (réglages, Rex Server) », le block restant focalisé dans sa session.
 - Reprise d'une session dormante (xst dans rex) : `session.new_window` dans la session d'xst, avec
-  un terminal `fish -C "<script>"` (même script que zellij), qui devient la fenêtre active.
+  un terminal `fish -C "<script>"` (même script que zellij), puis `session.select` vers cette
+  fenêtre comme pour Entrée.
 - Terminal lancé par xst : `shell: none` et fish par son chemin dans le `PATH` d'xst. Le shell de
   connexion par lequel rex lancerait sinon la commande n'a pas fish dans son `PATH` ; la
   configuration interactive de fish rétablit celui d'omp.
