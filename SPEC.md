@@ -3,18 +3,20 @@
 xs-tui (commande `xst`) est une application TUI de pilotage de harness LLM, développée en Rust avec
 Ratatui.
 La v1 affiche en temps réel les instances oh-my-pi (omp) en cours, avec leurs sous-agents, et
-permet d'aller au pane zellij d'une instance.
+permet d'aller au pane zellij ou au block rex d'une instance.
 
 ## Périmètre v1
 
 - Liste des instances omp interactives (mode `tui`) et de leurs sous-agents, en arbre.
 - Chaque ligne indique l'état de l'agent : `idle`, `working`, `blocked`, `error`.
 - Mise à jour dynamique : apparition, disparition et changement d'état des instances sans action de l'utilisateur.
-- Navigation au clavier, saut vers le pane zellij d'une instance, pliage des sous-agents.
+- Navigation au clavier, saut vers le pane zellij ou le block rex d'une instance, pliage des
+  sous-agents.
 - Sessions épinglées avec `/pin` d'omp : visibles même sans omp en cours, et reprises depuis
   xst, au premier plan ou en arrière-plan.
 - Copie en lecture seule de l'écran d'une instance, sous la liste (touche `d`).
-- Sessions headless : instances omp affichées dans aucun onglet zellij (touches `s` et `D`).
+- Sessions headless : instances omp affichées dans aucun onglet zellij ni aucune fenêtre rex
+  (touches `s` et `D`).
 - Envoi d'un prompt à une instance, sans aller à son pane (touche `w`).
 - Filtre de la liste par correspondance floue, comme fzf (touche `f`).
 - Jauges de consommation des abonnements Anthropic et OpenAI, à droite de la liste.
@@ -45,6 +47,7 @@ flowchart LR
   T -->|zellij pipe : s, D, Entrée| P[plugin zellij xs-tui]
   P -->|pane caché, ou sorti dans un onglet| Z
   Z -.->|zellij action list-panes : panes headless| T
+  T <-->|CLI rex : saut, fermeture, s, D, Entrée, copie, blocks détachés| RX[serveur rex]
   U["omp usage --json"] -->|fin de tour, reset, 15 min| T
   R[relai xs-parley] <-->|WebSocket : join, spawn, response| T
   C["API Capy (HTTPS)"] -->|threads : liste 60 s, état 10 s| T
@@ -61,7 +64,8 @@ Le dépôt contient trois composants :
 - `extension/` : l'extension omp xs-tui (paquet bun/TypeScript), installée par lien symbolique
   `~/.omp/agent/extensions/xs-tui -> <dépôt>/extension`, comme omp-cron et omp-q ;
 - `plugin/` : le plugin zellij xs-tui (Rust, cible `wasm32-wasip1`), compilé par `build.rs` et
-  embarqué dans `xst` (voir « Sessions headless »).
+  embarqué dans `xst` (voir « Sessions headless »). rex n'en demande pas : sa CLI suffit (voir
+  « rex »).
 
 xst contient aussi un client xs-parley natif (`src/xsp/`) : voir « Session-manager xs-parley ».
 
@@ -112,6 +116,7 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
   "title": "SPEC: Grill xs-tui SPEC design",
   "state": "working",
   "zellij": { "session": "m1", "paneId": "8" },
+  "rex": null,
   "startedAt": "2026-10-30T14:50:48.905Z",
   "updatedAt": "2026-10-30T15:58:02.114Z"
 }
@@ -127,6 +132,7 @@ L'extension écrit uniquement quand un champ change, jamais à la cadence d'une 
 | `title` | Titre de la session (`getSessionName()`), tel quel, icône nerd font comprise ; chaîne vide si la session n'a pas encore de titre. |
 | `state` | `idle`, `working`, `blocked` ou `error`. |
 | `zellij` | `{session, paneId}` lus dans `ZELLIJ_SESSION_NAME` et `ZELLIJ_PANE_ID` ; `null` hors zellij. |
+| `rex` | `{session, block, server}` lus dans `REX_SESSION`, `REX_BLOCK` et `REX_SERVER` (`server` à `null` sans lui) ; `null` hors rex. Absent des fichiers publiés avant le support de rex, lu comme `null`. Avec `zellij` et `rex` tous deux remplis (zellij lancé dans un terminal rex, qui transmet ses variables), xst suit zellij. |
 | `startedAt` | Démarrage de l'agent ; sert à l'ordre d'affichage. |
 | `updatedAt` | Dernière écriture du fichier. |
 
@@ -358,8 +364,9 @@ fait remonter à sa date de début.
 
 ### Instances hors de portée
 
-Une instance qu'Entrée ne peut pas atteindre (autre session zellij que celle d'xst, ou hors
-zellij) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
+Une instance qu'Entrée ne peut pas atteindre (pane d'une autre session zellij que celle d'xst, ou
+instance hors zellij et rex) est affichée atténuée (dim). Son indicateur d'état garde sa couleur.
+Un block rex est toujours à portée : la CLI rex l'atteint d'où que tourne xst.
 
 ### Liste vide
 
@@ -373,10 +380,12 @@ l'écran, elle défile au-delà), puis une ligne vide, une ligne de séparation 
 d'omp, sur toute la largeur, jusqu'à la barre du bas. La copie est en lecture seule et suit le
 curseur. Sur un thread Capy, elle montre sa conversation (voir « Threads Capy »).
 
-- Source : l'écran visible du pane zellij de l'instance sélectionnée, relu par
-  `zellij --session <session> action dump-screen --pane-id terminal_<paneId> --ansi` toutes les
-  250 ms tant que la copie est ouverte. Un sous-agent montre le pane de sa racine. Une instance
-  d'une autre session zellij est copiée aussi.
+- Source : l'écran visible du pane de l'instance sélectionnée, relu toutes les 250 ms tant que la
+  copie est ouverte. Un sous-agent montre le pane de sa racine. Une instance d'une autre session
+  zellij est copiée aussi.
+  - zellij : `zellij --session <session> action dump-screen --pane-id terminal_<paneId> --ansi`.
+  - rex : `rex capture --format=vt`, qui donne l'historique puis l'écran, dont xst garde les
+    `rows` dernières lignes (`rex block call size`).
 - zellij ne redessine pas un onglet qui n'est pas affiché : `zellij subscribe` ne diffuse donc
   rien pour le pane d'un omp dans un autre onglet, d'où la relecture à intervalle fixe.
 - Rendu : les couleurs d'omp sont conservées, sans atténuation. omp écrit de haut en bas sans
@@ -385,10 +394,10 @@ curseur. Sur un thread Capy, elle montre sa conversation (voir « Threads Capy �
 - Ligne de séparation : `── <titre de la session> ───`, puis à droite la taille source et celle de
   la zone (`187×57 → 120×24`) seulement quand la largeur est coupée.
 - Messages centrés grisés à la place de la copie : « Session dormante », « Ligne d'erreur »,
-  « Instance hors zellij », « Aucune session sélectionnée » (liste vide ; la copie reprend quand
-  une instance apparaît), « zellij introuvable », « Copie interrompue : <raison> » (pane fermé,
-  erreur de zellij). Après un échec, la copie ne relit plus l'écran jusqu'au prochain changement
-  de ligne ou à une réouverture.
+  « Instance hors zellij et rex », « Aucune session sélectionnée » (liste vide ; la copie reprend
+  quand une instance apparaît), « zellij introuvable », « rex introuvable », « Copie interrompue :
+  <raison> » (pane fermé, erreur de zellij ou de rex). Après un échec, la copie ne relit plus
+  l'écran jusqu'au prochain changement de ligne ou à une réouverture.
 - La copie n'est pas mémorisée : xst démarre avec la liste seule.
 
 ### Consommation
@@ -445,7 +454,7 @@ Anthropic
 | Touche | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Déplacer le curseur. |
-| `Entrée` | Aller au pane zellij de l'instance (`zellij action focus-pane-id terminal_<paneId>`). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ; sur une session dormante, la reprend (voir ci-dessous) ; sur un thread Capy, l'ouvre dans l'app desktop Capy (voir « Threads Capy »). |
+| `Entrée` | Aller au pane de l'instance : `zellij action focus-pane-id terminal_<paneId>`, ou focus du block rex (voir « rex »). Sur un sous-agent, va au pane de sa racine. Sur une instance headless, la sort dans un nouvel onglet ou une nouvelle fenêtre ; sur une session dormante, la reprend (voir ci-dessous) ; sur un thread Capy, l'ouvre dans l'app desktop Capy (voir « Threads Capy »). |
 | `s` | Reprendre la session dormante en headless, sans quitter xst (voir « Sessions headless »). Sans effet sur une ligne d'erreur. |
 | `w` | Saisir un prompt et l'envoyer à l'instance (à sa racine pour un sous-agent) ou au thread Capy, sans quitter xst (voir « Envoi de prompt »). Sans effet sur une ligne d'erreur. |
 | `D` | Passer l'instance en headless (celle de sa racine pour un sous-agent). Sans effet sur une ligne d'erreur. |
@@ -464,23 +473,26 @@ Anthropic
   dormante reprise par Entrée ou `s`, session épinglée fermée), le curseur la suit jusqu'à sa
   nouvelle ligne. Si l'élément disparaît, le curseur passe à son parent, sinon à la ligne voisine.
 - Entrée sur une instance d'une autre session zellij affiche « Instance dans la session zellij
-  “<nom>” » ; sur une instance hors zellij, « Instance hors zellij ». Aucune autre action.
+  “<nom>” » ; sur une instance hors zellij et rex, « Instance hors zellij et rex ». Aucune autre
+  action.
 - Entrée sur une session dormante, comme le script `zellij-resume.sh` d'omp-sessions :
   - déjà ouverte (voir « Sessions épinglées ») : « Session déjà ouverte par un autre omp », aucune
     autre action ;
-  - xst hors zellij : « xst hors zellij : reprise impossible » ;
-  - sinon : nouvel onglet dans la session zellij d'xst, ouvert dans le `cwd` de la session
-    (`$HOME` s'il n'existe plus) :
+  - xst hors zellij et rex : « xst hors zellij et rex : reprise impossible » ;
+  - xst dans rex : nouvelle fenêtre dans la session rex d'xst (voir « rex ») ;
+  - xst dans zellij : nouvel onglet dans la session zellij d'xst, ouvert dans le `cwd` de la
+    session (`$HOME` s'il n'existe plus) :
     `zellij action new-tab --cwd <cwd> -- fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`.
     fish reste ouvert quand omp se termine ; une fois omp relancé, l'extension publie et la ligne
     redevient une instance. `status job-control full` donne à omp son propre groupe de processus :
     sans lui (fish désactive le contrôle des tâches pour `-C`), le Ctrl+Z d'omp gèlerait aussi
     fish, et fermer le pane laisserait omp arrêté sans jamais le réveiller.
 - xst reste ouvert après un saut vers un pane : c'est un tableau de bord permanent.
-- `x` sur une instance de la session zellij d'xst affiche « Fermer “<titre>” ? x pour confirmer »
+- `x` sur une instance à portée affiche « Fermer “<titre>” ? x pour confirmer »
   (« cette session » sans titre). Un second `x` dans les 3 s ferme le pane avec `zellij action
-  close-pane --pane-id terminal_<paneId>` ; toute autre touche, ou 3 s d'attente, annule. zellij
-  envoie alors `SIGHUP` à omp, qui fait sa fermeture normale (session sauvegardée, dossier publié
+  close-pane --pane-id terminal_<paneId>`, ou le block avec `rex block close` ; toute autre
+  touche, ou 3 s d'attente, annule. zellij et rex envoient alors `SIGHUP` à omp, qui fait sa
+  fermeture normale (session sauvegardée, dossier publié
   supprimé). Une session épinglée devient dormante ; sinon sa ligne disparaît. Une instance hors
   de portée affiche le même message qu'Entrée ; `x` est sans effet sur une session dormante ou une
   ligne d'erreur.
@@ -488,13 +500,15 @@ Anthropic
   première) ne peut pas devenir dormante, il n'y a rien à reprendre. Le premier `x` l'annonce à la
   place de la question : « “<titre>” est vide : son épingle sera perdue. x pour fermer ».
 - Au démarrage dans zellij, xst renomme son onglet en `xs-tui` (`zellij action
-  rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`). Il ne remet pas l'ancien nom
-  en sortant : le hook fish qui nomme les onglets d'après le dépôt le fait à la commande suivante.
+  rename-tab-by-id`, l'onglet étant retrouvé par `ZELLIJ_PANE_ID`) ; dans rex, sa fenêtre
+  (`session.set_window_label`). Il ne remet pas l'ancien nom en sortant : le hook fish qui nomme
+  les onglets d'après le dépôt le fait à la commande suivante.
 
 ### Sessions headless
 
-Une session headless est une instance omp dont le pane zellij est « supprimé » : affiché dans aucun
-onglet, il garde son process, sa taille et son écran. zellij ne réserve ces panes qu'aux plugins :
+Une session headless est une instance omp dont le pane est affiché dans aucun onglet zellij ni
+aucune fenêtre rex : il garde son process, sa taille et son écran. Dans rex, c'est un block
+détaché (voir « rex »). zellij ne réserve ces panes (« supprimés ») qu'aux plugins :
 xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
 `zellij pipe --plugin file:<wasm> --name xs-tui -- <commande>`, dans un thread.
 
@@ -522,23 +536,57 @@ xst embarque le plugin zellij xs-tui (`plugin/`) et l'appelle par
 - Un pane caché est rattaché à l'onglet de plus petit id de la session ; quand cet onglet se
   ferme, il passe dans un autre, sans mourir. Il meurt avec la session zellij.
 - État headless : xst lit les panes de terminal `is_suppressed` de
-  `zellij action list-panes --tab --state --json`, dans un thread, au démarrage, à chaque
-  relecture des fichiers publiés, et 200 ms puis 1 s après chaque commande du plugin. Seules les
-  instances de la session zellij d'xst peuvent être headless pour xst.
+  `zellij action list-panes --tab --state --json`, et les blocks détachés des sessions rex des
+  instances, dans un thread, au démarrage, à chaque relecture des fichiers publiés, 200 ms puis
+  1 s après chaque commande du plugin, et aussitôt après `s`, `D` ou Entrée sur un block rex.
+  Seules les instances de la session zellij d'xst peuvent être headless pour xst dans zellij.
+- Une reprise en arrière-plan (`s`, session-manager) va dans le multiplexeur d'xst : pane caché
+  par le plugin dans zellij, block détaché dans rex. `D` et Entrée suivent le pane de l'instance.
 - `s` sur une session dormante : mêmes vérifications qu'Entrée (« Session déjà ouverte par un
   autre omp »), puis `spawn` de `fish -C "status job-control full; cd <cwd>; and omp --resume <id>"`
   et « “<titre>” reprise en arrière-plan » (« Session reprise en arrière-plan » sans titre). Une
   fois omp relancé, la ligne remonte parmi les instances, avec son état et sa copie `d`. Sur une
   instance headless : « Session déjà en arrière-plan » ; sur une autre instance : « Session déjà
   ouverte : D pour la passer en arrière-plan ».
-- `D` sur une instance de la session zellij d'xst : `hide`, et « “<titre>” passée en
-  arrière-plan ». Déjà headless : « Session déjà en arrière-plan » ; session dormante : « Session
-  dormante : s pour la reprendre en arrière-plan » ; instance hors de portée : même message
-  qu'Entrée.
+- `D` sur une instance à portée : `hide` (ou `session.detach_block` dans rex), et « “<titre>”
+  passée en arrière-plan ». Déjà headless : « Session déjà en arrière-plan » ; session dormante :
+  « Session dormante : s pour la reprendre en arrière-plan » ; instance hors de portée : même
+  message qu'Entrée.
 - Entrée sur une instance headless : `show` ; le pane passe dans un nouvel onglet, qui prend le
   focus.
-- `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`).
-- xst hors zellij : « xst hors zellij : arrière-plan impossible » pour `s` et `D`.
+- `x` et la copie `d` traitent un pane headless comme un autre (`close-pane`, `dump-screen`,
+  `rex block close`, `rex capture`).
+- xst hors zellij et rex : « xst hors zellij et rex : arrière-plan impossible » pour `s` ; `D`
+  reste possible sur un block rex.
+
+### rex
+
+rex est un multiplexeur : sessions, fenêtres (les onglets) et
+blocks (les panes), tenus par un serveur local que pilotent l'app Rex.app et la CLI `rex`. xst ne
+passe que par la CLI, toujours avec `--autostart=false` (une commande ne démarre pas de serveur
+absent) et `-S <server>` quand l'instance a publié le sien. Où tourne xst : zellij si
+`ZELLIJ_SESSION_NAME` est défini, sinon rex si `REX_SESSION` et `REX_BLOCK` le sont.
+
+- Entrée : `session.focus_block` (la fenêtre du block devient active), puis
+  `rex -C <app> do session.select session_id=<session>` pour chaque app connectée : aucune API ne
+  dit quelle session une app affiche. Sans Remote Control activé dans les réglages de Rex.app
+  (Rex Server), l'app refuse : « Rex.app ne change de session qu'avec Remote Control (réglages,
+  Rex Server) », le block restant focalisé dans sa session.
+- Reprise d'une session dormante (xst dans rex) : `session.new_window` dans la session d'xst, avec
+  un terminal `fish -C "<script>"` (même script que zellij), qui devient la fenêtre active.
+- Terminal lancé par xst : `shell: none` et fish par son chemin dans le `PATH` d'xst. Le shell de
+  connexion par lequel rex lancerait sinon la commande n'a pas fish dans son `PATH` ; la
+  configuration interactive de fish rétablit celui d'omp.
+- `s` et session-manager (xst dans rex) : `session.new_block`, block détaché dans la session
+  d'xst, à la taille du terminal d'xst. Sans app qui l'affiche, un block garde la taille de sa
+  création (80×24 par défaut).
+- `D` : `session.detach_block`. Seul dans sa fenêtre, le block la quitte et la fenêtre se ferme.
+- Entrée sur un block détaché : rex ne crée une fenêtre qu'avec de nouveaux blocks. xst ouvre une
+  fenêtre avec un terminal provisoire (`/bin/sleep 30`), y place le block (`session.move_block`),
+  ferme le provisoire, puis focalise le block comme Entrée.
+- Blocks détachés : `session.list_blocks` de chaque session rex des instances,
+  `placement: detached`. Une session injoignable ne compte pas.
+- `x` : `rex block close`, qui envoie `SIGHUP` à omp.
 
 ### Filtre
 
@@ -612,12 +660,12 @@ session zellij ou hors zellij, et ne touche pas au texte en cours dans l'éditeu
 
 ### Session-manager xs-parley
 
-Dans zellij, xst est le session-manager de la machine pour xs-parley (SPEC d'xs-parley § 7.7) : un
-membre de rang `M` de chaque parley jointe par les sessions omp de la machine. Un master qui
-adresse une demande à une session hors ligne lui envoie une enveloppe `spawn` portant l'id de la
-session ; xst la reprend en headless, comme `s`, et répond par une `response`. Le master envoie
-ensuite sa demande à la session, une fois en ligne. Hors zellij, xst ne peut rien reprendre en
-arrière-plan : pas de manager, ni connexion ni identité.
+Dans zellij ou rex, xst est le session-manager de la machine pour xs-parley (SPEC d'xs-parley
+§ 7.7) : un membre de rang `M` de chaque parley jointe par les sessions omp de la machine. Un
+master qui adresse une demande à une session hors ligne lui envoie une enveloppe `spawn` portant
+l'id de la session ; xst la reprend en headless, comme `s`, et répond par une `response`. Le
+master envoie ensuite sa demande à la session, une fois en ligne. Hors zellij et rex, xst ne peut
+rien reprendre en arrière-plan : pas de manager, ni connexion ni identité.
 
 - Client natif Rust (`src/xsp/`) : clés `xs2`, certificats, `cert_box` (XChaCha20-Poly1305),
   enveloppes HPKE (X25519-HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305) et signatures Ed25519
@@ -649,10 +697,10 @@ arrière-plan : pas de manager, ni connexion ni identité.
     acceptées » ; les autres kinds sont seulement journalisés.
 - Reprise par xst : fichier de session introuvable → `error` « fichier de session introuvable » ;
   session déjà ouverte (instance publiée ou bail `~/.omp/run/session-owners/<id>.lock` tenu) →
-  `ok` avec `reason` « déjà ouverte » ; sinon reprise headless (`spawn` du plugin, voir « Sessions
+  `ok` avec `reason` « déjà ouverte » ; sinon reprise headless (comme `s`, voir « Sessions
   headless ») dans le dossier de la session (`$HOME` s'il a disparu) et message « “<titre>”
-  réveillée par <alias>@<parley> ». Un plugin indisponible répond `error` avec sa raison (« xst
-  hors zellij : arrière-plan impossible », « plugin xs-tui : … »).
+  réveillée par <alias>@<parley> ». Un arrière-plan indisponible répond `error` avec sa raison
+  (« plugin xs-tui : … », erreur de rex).
 - Réponse : `ok` dès que l'instance publie son fichier xs-tui ; sans publication en 60 s,
   `error` « l'instance n'a pas publié dans les 60 s » ; si xst ne traite pas la demande en 90 s,
   le manager répond `error` « xst n'a pas répondu ». Chaque réponse est journalisée `spawned` ou
@@ -739,12 +787,18 @@ l'ouvrir dans Capy, d pour sa conversation ». Le filtre `f` cherche dans le pro
   passage par un nouvel onglet ; chaque `zellij pipe` lui arrive une seconde fois sans contenu,
   qu'il ignore ; `open_command_pane_background` ignore le dossier demandé, que fixe le `cd` du
   script fish. Une autre version de zellij peut changer ces comportements.
-- Le session-manager n'a qu'une identité par machine : deux xst dans zellij se la disputent au
+- Le session-manager n'a qu'une identité par machine : deux xst dans zellij ou rex se la disputent au
   relai. Le dernier connecté reprend l'empreinte ; l'autre reçoit `replaced`, affiche le problème
   et ne rejoint plus la parley jusqu'au prochain changement de `parleys/`.
 - Un porteur de la clé answer peut se déclarer manager (rang `M`) ; il ne gagne que la réception
   des `spawn`, donc au pire un déni de réveil.
 - `spawn` crée puis ferme un onglet : il peut apparaître un instant dans la barre d'onglets.
+- rex est en préversion (`0.1.0-preview`, API révision 18) : les méthodes `session.*`, le champ
+  `placement` et le format `vt` de `rex capture` peuvent changer.
+- La copie d'un block rex relit son historique entier à chaque lecture (`rex capture` n'a pas
+  d'option pour l'écran seul) : coûteux pour une longue session tant que la copie est ouverte.
+- Entrée sur un block rex fait passer à sa session chaque app Rex connectée, sur toutes les
+  machines.
 - Les threads Capy dépendent du format de l'API publique de Capy, qui peut évoluer. La relecture
   complète fait une requête par projet et par page de 100 threads toutes les 60 s, plus une par
   thread affiché toutes les 10 s : une organisation avec beaucoup de projets peut atteindre la

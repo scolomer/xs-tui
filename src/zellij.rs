@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -24,56 +24,38 @@ const PLUGIN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Nom donné à l'onglet zellij d'xst.
 pub const TAB_NAME: &str = "xs-tui";
 
-/// Vrai si `focus` peut atteindre `target` depuis la session zellij `own`.
-pub fn reachable(own: Option<&str>, target: Option<&Zellij>) -> bool {
-    check_target(own, target).is_ok()
-}
-
 /// Focalise le pane `target` ; message d'erreur à afficher dans la barre sinon.
-pub fn focus(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
-    let target = check_target(own, target)?;
+pub fn focus(own: Option<&str>, target: &Zellij) -> Result<(), String> {
+    check_target(own, target)?;
     run(Command::new("zellij").args(["action", "focus-pane-id", &format!("terminal_{}", target.pane_id)]))
 }
 
 /// Vérifie qu'une action (saut, fermeture, plugin) peut atteindre `target` depuis la session
 /// zellij `own`.
-pub fn check_target<'a>(own: Option<&str>, target: Option<&'a Zellij>) -> Result<&'a Zellij, String> {
-    let target = target.ok_or("Instance hors zellij")?;
+pub fn check_target(own: Option<&str>, target: &Zellij) -> Result<(), String> {
     if own != Some(target.session.as_str()) {
         return Err(format!("Instance dans la session zellij “{}”", target.session));
     }
-    Ok(target)
+    Ok(())
 }
 
 /// Ferme le pane `target`. zellij envoie `SIGHUP` à omp, qui fait sa fermeture normale : session
 /// sauvegardée, dossier publié supprimé par l'extension.
-pub fn close(own: Option<&str>, target: Option<&Zellij>) -> Result<(), String> {
-    let target = check_target(own, target)?;
+pub fn close(own: Option<&str>, target: &Zellij) -> Result<(), String> {
+    check_target(own, target)?;
     run(Command::new("zellij").args(["action", "close-pane", "--pane-id", &format!("terminal_{}", target.pane_id)]))
 }
 
-/// Reprend la session `id` dans un nouvel onglet de la session zellij courante, ouvert dans `cwd`,
+/// Ouvre `script` (fish) dans un nouvel onglet de la session zellij courante, ouvert dans `cwd`,
 /// comme `zellij-resume.sh` d'omp-sessions.
-pub fn resume(own: Option<&str>, id: &str, cwd: &Path) -> Result<(), String> {
-    if own.is_none() {
-        return Err("xst hors zellij : reprise impossible".into());
-    }
-    run(Command::new("zellij").args(["action", "new-tab", "--cwd"]).arg(cwd).args(["--", "fish", "-C", &resume_script(id, cwd)]))
-}
-
-/// Script fish qui reprend la session `id` dans `cwd` ; fish reste ouvert après la sortie d'omp.
-///
-/// fish n'active pas le contrôle des tâches pour `-C` : sans `status job-control full`, omp
-/// resterait dans le groupe de processus de fish. Son Ctrl+Z (`SIGSTOP` au groupe) gèlerait alors
-/// fish avec lui, et fermer le pane laisserait omp arrêté pour toujours.
-fn resume_script(id: &str, cwd: &Path) -> String {
-    format!("status job-control full; cd {}; and omp --resume {id}", fish_quote(cwd))
+pub fn resume(script: &str, cwd: &Path) -> Result<(), String> {
+    run(Command::new("zellij").args(["action", "new-tab", "--cwd"]).arg(cwd).args(["--", "fish", "-C", script]))
 }
 
 /// Commande du plugin xs-tui (`plugin/src/main.rs`).
 pub enum Headless<'a> {
-    /// Reprend la session `id`, ouverte dans `cwd`, dans un pane headless.
-    Resume { id: &'a str, cwd: &'a Path },
+    /// Lance `script` (fish) dans `cwd`, dans un pane headless.
+    Spawn { script: &'a str, cwd: &'a Path },
     /// Sort le pane headless dans un nouvel onglet, qui prend le focus.
     Show(&'a str),
     /// Rend le pane headless.
@@ -84,9 +66,7 @@ impl Headless<'_> {
     /// Contenu du pipe : le nom de la commande puis ses arguments, un par ligne.
     fn payload(&self) -> String {
         match self {
-            Headless::Resume { id, cwd } => {
-                ["spawn", &cwd.to_string_lossy(), "fish", "-C", &resume_script(id, cwd)].join("\n")
-            }
+            Headless::Spawn { script, cwd } => ["spawn", &cwd.to_string_lossy(), "fish", "-C", script].join("\n"),
             Headless::Show(pane) => format!("show\n{pane}"),
             Headless::Hide(pane) => format!("hide\n{pane}"),
         }
@@ -188,30 +168,10 @@ fn pipe(url: &str, payload: &str, tx: &Sender<Event>) -> Result<(), String> {
     }
 }
 
-/// Thread qui relit les panes headless de la session zellij courante à chaque demande ; les
-/// demandes en rafale sont fusionnées en une seule relecture.
-pub fn spawn_headless_refresher(tx: Sender<Event>) -> Sender<()> {
-    let (requests, rx) = mpsc::channel::<()>();
-    std::thread::Builder::new()
-        .name("headless".into())
-        .spawn(move || {
-            while rx.recv().is_ok() {
-                while rx.try_recv().is_ok() {}
-                // Sans réponse de zellij, les derniers panes connus restent affichés.
-                if let Ok(panes) = list_panes()
-                    && tx.send(Event::Headless(headless_panes(&panes))).is_err()
-                {
-                    return;
-                }
-            }
-        })
-        .expect("thread des panes headless");
-    requests
-}
-
-/// Ids des panes de terminal « supprimés » par zellij : affichés dans aucun onglet.
-fn headless_panes(panes: &[Pane]) -> HashSet<String> {
-    panes.iter().filter(|p| !p.is_plugin && p.is_suppressed).map(|p| p.id.to_string()).collect()
+/// Ids des panes de terminal « supprimés » par zellij dans la session courante : affichés dans
+/// aucun onglet.
+pub fn headless_panes() -> Result<HashSet<String>, String> {
+    Ok(list_panes()?.iter().filter(|p| !p.is_plugin && p.is_suppressed).map(|p| p.id.to_string()).collect())
 }
 
 /// Affiche et focalise le pane du plugin qui attend ses permissions : lancé par un pipe, il s'ouvre
@@ -262,20 +222,4 @@ fn run(command: &mut Command) -> Result<(), String> {
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     Err(format!("zellij : {}", stderr.trim().chars().take(80).collect::<String>()))
-}
-
-/// Chaîne fish entre apostrophes : seuls `\` et `'` s'y échappent.
-fn fish_quote(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    format!("'{}'", raw.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fish_quote_escapes_backslashes_and_quotes() {
-        assert_eq!(fish_quote(Path::new(r"/tmp/l'a\b")), r"'/tmp/l\'a\\b'");
-    }
 }

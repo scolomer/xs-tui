@@ -8,7 +8,7 @@ use crate::capy::Status;
 use crate::filter::Query;
 use crate::git::Repo;
 use crate::pins::Pinned;
-use crate::record::{Kind, Record, State, Zellij};
+use crate::record::{Kind, Pane, Record, State};
 
 /// Identité d'une ligne : (pid, `agent.id`). Une ligne d'erreur a un id vide ; une session
 /// dormante a le pid `DORMANT_PID` et son id de session ; un thread Capy a le pid `CAPY_PID` et son
@@ -54,11 +54,13 @@ pub struct Model {
     pub usage_error: Option<String>,
     /// Ids des panes headless (« supprimés » par zellij) de la session zellij d'xst.
     pub headless: HashSet<String>,
+    /// Ids des blocks rex détachés : affichés dans aucune fenêtre.
+    pub detached: HashSet<String>,
     /// Requête du filtre (SPEC.md § Filtre) ; vide, la liste n'est pas filtrée.
     pub filter: String,
     /// Vrai pendant la saisie du filtre.
     pub filtering: bool,
-    /// État du session-manager xs-parley ; `None` sans manager (hors zellij).
+    /// État du session-manager xs-parley ; `None` sans manager (hors zellij et rex).
     pub manager: Option<crate::xsp::ManagerStatus>,
     /// Threads Capy de l'utilisateur, non archivés (SPEC.md § Threads Capy) ; gardés après un échec
     /// de relecture.
@@ -101,9 +103,14 @@ impl Model {
         self.pins.iter().any(|id| id == session_id)
     }
 
-    /// Vrai si `target`, pane d'une instance, est headless dans la session zellij `own` d'xst.
-    pub fn is_headless(&self, own: Option<&str>, target: Option<&Zellij>) -> bool {
-        target.is_some_and(|z| own == Some(z.session.as_str()) && self.headless.contains(&z.pane_id))
+    /// Vrai si `pane`, pane d'une instance, est headless : pane zellij caché de la session zellij
+    /// `own` d'xst, ou block rex détaché.
+    pub fn is_headless(&self, own: Option<&str>, pane: Option<Pane>) -> bool {
+        match pane {
+            Some(Pane::Zellij(z)) => own == Some(z.session.as_str()) && self.headless.contains(&z.pane_id),
+            Some(Pane::Rex(r)) => self.detached.contains(&r.block),
+            None => false,
+        }
     }
 
     /// Ids épinglés qu'aucune instance ne publie, dans l'ordre des épingles.
@@ -372,7 +379,7 @@ pub fn any_working(m: &Model, rows: &[Row]) -> bool {
 /// Ce que montre la copie pour la ligne sélectionnée (SPEC.md § Copie de session).
 #[derive(Debug, PartialEq, Eq)]
 pub enum CopySource<'a> {
-    Pane(&'a Zellij),
+    Pane(Pane<'a>),
     /// Id du thread Capy dont la copie suit la conversation.
     Capy(&'a str),
     Message(&'static str),
@@ -386,9 +393,9 @@ pub fn copy_source<'a>(m: &'a Model, row: Option<&'a Row>) -> CopySource<'a> {
         RowKind::Error => CopySource::Message("Ligne d'erreur"),
         RowKind::Capy => CopySource::Capy(row.key.1.as_str()),
         RowKind::Root | RowKind::Sub { .. } => {
-            match m.instances.get(&(row.key.0, ROOT_ID.to_string())).and_then(|r| r.zellij.as_ref()) {
-                Some(z) => CopySource::Pane(z),
-                None => CopySource::Message("Instance hors zellij"),
+            match m.instances.get(&(row.key.0, ROOT_ID.to_string())).and_then(Record::pane) {
+                Some(pane) => CopySource::Pane(pane),
+                None => CopySource::Message("Instance hors zellij et rex"),
             }
         }
     }
@@ -422,7 +429,7 @@ pub fn copy_title<'a>(m: &'a Model, row: Option<&Row>) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::Agent;
+    use crate::record::{Agent, Zellij};
 
     fn rec(pid: i32, id: &str, parent: Option<&str>, started: &str) -> Record {
         Record {
@@ -438,6 +445,7 @@ mod tests {
             title: String::new(),
             state: State::Idle,
             zellij: None,
+            rex: None,
             started_at: started.into(),
         }
     }
@@ -621,8 +629,8 @@ mod tests {
         let rows = rows(&m);
         let source = |key: (i32, &str)| copy_source(&m, rows.iter().find(|r| (r.key.0, r.key.1.as_str()) == key));
         let pane = Zellij { session: "m1".into(), pane_id: "8".into() };
-        assert_eq!(source((1, "A")), CopySource::Pane(&pane));
-        assert_eq!(source((2, "Main")), CopySource::Message("Instance hors zellij"));
+        assert_eq!(source((1, "A")), CopySource::Pane(Pane::Zellij(&pane)));
+        assert_eq!(source((2, "Main")), CopySource::Message("Instance hors zellij et rex"));
         assert_eq!(source((DORMANT_PID, "x")), CopySource::Message("Session dormante"));
     }
 

@@ -16,10 +16,10 @@ use crate::conversation::{Conversation, Source};
 use crate::filter::Query;
 use crate::mirror::{Mirror, View};
 use crate::model::{self, Model, ROOT_ID, Row, RowKind};
+use crate::mux::{self, Host};
 use crate::prompt::Prompt;
 use crate::record::State;
 use crate::usage::{self, Status};
-use crate::zellij;
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const HELP: &str =
@@ -41,7 +41,7 @@ pub fn draw(
     frame: &mut Frame,
     m: &Model,
     rows: &[Row],
-    own_zellij: Option<&str>,
+    host: &Host,
     list: &mut ListState,
     mirror: Option<&Mirror>,
     prompt: Option<&Prompt>,
@@ -82,7 +82,7 @@ pub fn draw(
         .max()
         .unwrap_or(0);
     let query = Query::new(&m.filter);
-    let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, own_zellij, title_col, query.as_ref())).collect();
+    let lines: Vec<Line> = rows.iter().map(|row| row_line(m, row, host, title_col, query.as_ref())).collect();
     // `› ` devant chaque ligne.
     let empty = if m.filter.trim().is_empty() { EMPTY } else { NO_MATCH };
     let list_width = lines.iter().map(|l| l.width() + 2).max().unwrap_or(empty.chars().count());
@@ -403,7 +403,7 @@ fn capy_line<'a>(m: &Model, t: &'a capy::Thread, title_col: usize, query: Option
     Line::from(spans)
 }
 
-fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: usize, query: Option<&Query>) -> Line<'a> {
+fn row_line<'a>(m: &'a Model, row: &Row, host: &Host, title_col: usize, query: Option<&Query>) -> Line<'a> {
     let pid = row.key.0;
     if row.kind == RowKind::Capy {
         return m.capy_thread(&row.key).map_or_else(Line::default, |t| capy_line(m, t, title_col, query));
@@ -426,7 +426,7 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
         return Line::from(spans);
     };
     let root = m.instances.get(&(pid, ROOT_ID.to_string())).unwrap_or(rec);
-    let dim = !zellij::reachable(own_zellij, root.zellij.as_ref());
+    let dim = !mux::reachable(host, root.pane());
 
     // Spans hors indicateur : atténués si l'instance est hors de portée.
     let mut before = Vec::new();
@@ -442,7 +442,7 @@ fn row_line<'a>(m: &'a Model, row: &Row, own_zellij: Option<&str>, title_col: us
         RowKind::Error | RowKind::Dormant | RowKind::Capy => unreachable!(),
     };
     if show_location {
-        let style = if m.is_headless(own_zellij, root.zellij.as_ref()) { Folder::Headless } else { Folder::Live };
+        let style = if m.is_headless(host.zellij(), root.pane()) { Folder::Headless } else { Folder::Live };
         after = location(m, &rec.cwd, style, query);
     }
     match row.kind {

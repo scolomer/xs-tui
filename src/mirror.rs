@@ -1,7 +1,7 @@
 //! Copie de la ligne sélectionnée (SPEC.md § Copie de session). Pour une instance omp, un thread
-//! relit l'écran visible du pane avec `zellij action dump-screen --ansi` toutes les `POLL`, et
-//! l'envoie converti en texte ratatui quand il a changé. Pour un thread Capy, un thread suit sa
-//! conversation (`conversation.rs`).
+//! relit l'écran visible de son pane toutes les `POLL` (`zellij action dump-screen --ansi`, ou
+//! `rex capture --format=vt`), et l'envoie converti en texte ratatui quand il a changé. Pour un
+//! thread Capy, un thread suit sa conversation (`conversation.rs`).
 //!
 //! Relecture à intervalle fixe : `zellij subscribe` ne diffuse rien pour un pane dont l'onglet n'est
 //! pas affiché, puisque zellij ne le redessine pas.
@@ -17,6 +17,8 @@ use ratatui::text::Text;
 
 use crate::capy::Api;
 use crate::conversation::{self, Conversation};
+use crate::record::{Pane, Rex};
+use crate::rex;
 use crate::watch::Event;
 
 /// Intervalle entre deux relectures de l'écran copié.
@@ -43,7 +45,8 @@ pub enum Update {
 #[derive(PartialEq, Eq)]
 enum Target {
     /// (session zellij, id du pane).
-    Pane(String, String),
+    Zellij(String, String),
+    Rex(Rex),
     /// Id du thread Capy.
     Capy(String),
 }
@@ -64,11 +67,24 @@ impl Mirror {
         Mirror { target: None, stop: Arc::new(AtomicBool::new(true)), generation: 0, view: View::Waiting, tx }
     }
 
-    /// Copie le pane `pane_id` de la session zellij `session` ; rien si c'est déjà la cible.
-    pub fn follow(&mut self, session: &str, pane_id: &str) {
-        let target = Target::Pane(session.to_string(), pane_id.to_string());
-        let (session, pane) = (session.to_string(), format!("terminal_{pane_id}"));
-        self.start(target, "zellij-dump-screen", move |stop, generation, tx| poll(&session, &pane, &stop, generation, &tx));
+    /// Copie le pane `pane` ; rien si c'est déjà la cible.
+    pub fn follow(&mut self, pane: Pane) {
+        match pane {
+            Pane::Zellij(z) => {
+                let target = Target::Zellij(z.session.clone(), z.pane_id.clone());
+                let (session, pane) = (z.session.clone(), format!("terminal_{}", z.pane_id));
+                self.start(target, "zellij-dump-screen", move |stop, generation, tx| {
+                    poll(|| dump(&session, &pane), &stop, generation, &tx)
+                });
+            }
+            Pane::Rex(r) => {
+                let block = r.clone();
+                self.start(Target::Rex(r.clone()), "rex-capture", move |stop, generation, tx| {
+                    let screen = || rex::screen(&block).map_err(|m| if m == "rex introuvable" { m } else { format!("Copie interrompue : {m}") });
+                    poll(screen, &stop, generation, &tx)
+                });
+            }
+        }
     }
 
     /// Suit la conversation du thread Capy `thread` ; rien si c'est déjà la cible. Le flux se ferme
@@ -126,11 +142,11 @@ impl Drop for Mirror {
     }
 }
 
-/// Relit l'écran de `pane` jusqu'à `stop` ou au premier échec ; n'envoie que les écrans qui changent.
-fn poll(session: &str, pane: &str, stop: &AtomicBool, generation: u64, tx: &Sender<Event>) {
+/// Relit l'écran par `read` jusqu'à `stop` ou au premier échec ; n'envoie que les écrans qui changent.
+fn poll(read: impl Fn() -> Result<Vec<u8>, String>, stop: &AtomicBool, generation: u64, tx: &Sender<Event>) {
     let mut last: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
-        let update = match dump(session, pane) {
+        let update = match read() {
             Ok(screen) if screen == last => None,
             Ok(screen) => {
                 let text = screen.into_text().unwrap_or_default();

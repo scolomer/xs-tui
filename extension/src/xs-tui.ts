@@ -43,6 +43,8 @@ export default function xsTui(pi: ExtensionAPI) {
 	function record(ctx: ExtensionContext) {
 		const session = process.env.ZELLIJ_SESSION_NAME;
 		const paneId = process.env.ZELLIJ_PANE_ID;
+		const rexSession = process.env.REX_SESSION;
+		const rexBlock = process.env.REX_BLOCK;
 		return {
 			v: FORMAT_VERSION,
 			pid: process.pid,
@@ -59,6 +61,7 @@ export default function xsTui(pi: ExtensionAPI) {
 			title: ctx.sessionManager.getSessionName() ?? "",
 			state: tracker.state,
 			zellij: session && paneId ? { session, paneId } : null,
+			rex: rexSession && rexBlock ? { session: rexSession, block: rexBlock, server: process.env.REX_SERVER ?? null } : null,
 			startedAt,
 			updatedAt: new Date().toISOString(),
 		};

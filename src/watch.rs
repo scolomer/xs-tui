@@ -32,6 +32,8 @@ pub enum Event {
     Notice(String),
     /// Ids des panes headless de la session zellij courante.
     Headless(std::collections::HashSet<String>),
+    /// Ids des blocks rex détachés des sessions rex des instances.
+    Detached(std::collections::HashSet<String>),
     Key(KeyEvent),
     /// Texte collé (bracketed paste).
     Paste(String),

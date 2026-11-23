@@ -1,11 +1,11 @@
 # xs-tui
 
 A terminal dashboard for [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) coding-agent
-sessions running in [zellij](https://zellij.dev).
+sessions running in [zellij](https://zellij.dev) or rex.
 
 xs-tui (command `xst`) lists every interactive omp instance and its subagents in a live tree,
-shows what each one is doing, and lets you jump to its zellij pane, watch its screen, or resume a
-pinned session that is no longer running.
+shows what each one is doing, and lets you jump to its zellij pane or rex block, watch its screen,
+or resume a pinned session that is no longer running.
 
 ```
 › ⠹  xs-tui  main *2          TUI: xs-tui
@@ -23,9 +23,12 @@ pinned session that is no longer running.
   when it waits for you (a tool approval or a question), red after an error.
 - **Folder and git branch.** Each row shows the session's folder and branch, colored and counted
   like omp's own status line (`*` unstaged, `+` staged, `?` untracked).
-- **Jump to a session.** `Enter` focuses the instance's zellij pane.
+- **Jump to a session.** `Enter` focuses the instance's zellij pane or rex block.
 - **Pinned sessions.** Sessions pinned with omp's `/pin` or xst's `p` end with a grey pin and stay
-  listed after omp exits (`○`); `Enter` resumes them in a new zellij tab.
+  listed after omp exits (`○`); `Enter` resumes them in a new zellij tab or rex window.
+- **Rex.** Instances running in rex are reached through the `rex` CLI from anywhere, even when
+  xst runs in zellij. Headless sessions there are detached blocks, with no plugin. For `Enter`
+  to switch Rex.app to another session, turn on Remote Control in its Rex Server settings.
 - **Session copy.** `d` splits the screen and shows a live, read-only copy of the selected
   session's screen under the list, exactly as omp draws it.
 - **Send a prompt.** `w` types a prompt in the bottom bar and sends it to the selected instance,
@@ -44,7 +47,7 @@ pinned session that is no longer running.
   over its event stream only while it is on screen. `Enter` opens the thread in the Capy desktop
   app (`capy://app/thread/<id>`), and `w` sends it a prompt through the API, steering it like a
   message typed in Capy.
-- **Session-manager xs-parley.** Inside zellij, xst joins every xs-parley parley
+- **Session-manager xs-parley.** Inside zellij or rex, xst joins every xs-parley parley
   of the machine as its session-manager (rank `M`). When a master asks a session that is offline,
   it sends xst a `spawn`: xst resumes that omp session headless, like `s`, and answers once the
   instance publishes, so the master can deliver its request. The bottom bar shows
@@ -65,8 +68,9 @@ omp exposes its run state only on its own terminal, so the repository holds two 
 
 Updates are event-driven (FSEvents or inotify, kqueue or pidfd), with three timed refreshes: the
 git status every 10 s, like omp's status line; the session copy every 250 ms while it is open,
-because zellij does not render a pane whose tab is hidden; and usage every 15 min, on top of the
-refresh after each finished turn, to catch usage made outside omp.
+because zellij does not render a pane whose tab is hidden and xst reads rex blocks with
+`rex capture`; and usage every 15 min, on top of the refresh after each finished turn, to catch
+usage made outside omp.
 
 xst also embeds a native xs-parley client (`src/xsp/`: Ed25519, HPKE, XChaCha20-Poly1305 and a
 rustls WebSocket per relay). Its identity lives in `~/.omp/xs-parley/manager.json` and
@@ -79,8 +83,8 @@ rustls WebSocket per relay). Its identity lives in `~/.omp/xs-parley/manager.jso
 ## Requirements
 
 - macOS or Linux
-- [zellij](https://zellij.dev) 0.45 or later; xst also runs outside zellij, without pane jumps,
-  resume or session copy
+- [zellij](https://zellij.dev) 0.45 or later, or rex (tested with `0.1.0-preview.21`); xst also
+  runs outside both, without resume or headless sessions
 - [omp](https://github.com/can1357/oh-my-pi) with interactive (`tui`) sessions
 - [fish](https://fishshell.com), used to resume pinned sessions
 - [mise](https://mise.jdx.dev), which provides Rust and Bun
@@ -103,7 +107,7 @@ and checks that the record is removed.
 
 ## Usage
 
-Run `xst` in a zellij pane. It renames its tab to `xs-tui`.
+Run `xst` in a zellij pane or a rex block. It renames its tab or window to `xs-tui`.
 
 | Key | Action |
 |---|---|

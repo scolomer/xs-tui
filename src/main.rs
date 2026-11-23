@@ -10,10 +10,12 @@ mod filter;
 mod git;
 mod mirror;
 mod model;
+mod mux;
 mod pins;
 mod proc;
 mod prompt;
 mod record;
+mod rex;
 mod ui;
 mod usage;
 mod watch;
@@ -31,12 +33,12 @@ use ratatui::widgets::ListState;
 
 use mirror::Mirror;
 use model::{CopySource, Key, Model, ROOT_ID, Row, RowKind};
+use mux::{Host, Mux, Scope};
 use pins::Pinned;
 use prompt::{Prompt, Target};
-use record::{Kind, Parsed, State};
+use record::{Kind, Pane, Parsed, State};
 use watch::Event;
 use xsp::{Command, SpawnRequest, XspEvent};
-use zellij::Headless;
 
 const SPINNER_FRAME: Duration = Duration::from_millis(100);
 const MESSAGE_TTL: Duration = Duration::from_secs(3);
@@ -61,7 +63,8 @@ struct App {
     /// `~/.omp/agent` : `session-pins.json` et fichiers de session.
     agent_dir: PathBuf,
     home: PathBuf,
-    own_zellij: Option<String>,
+    /// zellij ou rex : où tourne xst, et actions sur le pane des instances.
+    mux: Mux,
     tx: Sender<Event>,
     watcher: RecommendedWatcher,
     /// Gitdirs déjà ajoutés au watcher.
@@ -76,13 +79,9 @@ struct App {
     usage: Sender<()>,
     /// Racine dont la fermeture attend un second `x`, et heure du premier.
     close_pending: Option<(Key, Instant)>,
-    /// Plugin zellij des sessions headless, ou la raison de son absence.
-    plugin: Result<zellij::Plugin, String>,
-    /// Demandes au thread qui relit les panes headless.
-    headless: Sender<()>,
     /// Prompt en cours de saisie, ouvert par `w` (SPEC.md § Envoi de prompt).
     prompt: Option<Prompt>,
-    /// Session-manager xs-parley, dans zellij seulement (SPEC.md § Session-manager xs-parley).
+    /// Session-manager xs-parley, dans zellij ou rex seulement (SPEC.md § Session-manager xs-parley).
     manager: Option<xsp::Manager>,
     /// API Capy, si `CAPY_API_KEY` est défini : relecture des threads et conversation de la copie.
     capy: Option<capy::Api>,
@@ -108,18 +107,9 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let headless = zellij::spawn_headless_refresher(tx.clone());
-    let own_zellij = std::env::var("ZELLIJ_SESSION_NAME").ok();
-    let plugin = match own_zellij {
-        None => Err("xst hors zellij : arrière-plan impossible".to_string()),
-        Some(_) => zellij::Plugin::install(&home.join(".cache/xst"), headless.clone())
-            .map_err(|err| format!("plugin xs-tui : {err}")),
-    };
-    // Hors zellij, xst ne peut rien reprendre en arrière-plan : pas de manager.
-    let manager = match own_zellij {
-        None => Err("xst hors zellij".to_string()),
-        Some(_) => xsp::start(xsp_root, tx.clone()),
-    };
+    let mux = Mux::new(&home, tx.clone());
+    // Sans arrière-plan possible, xst ne pourrait rien reprendre : pas de manager.
+    let manager = mux.background_ready().and_then(|()| xsp::start(xsp_root, tx.clone()));
     let mut app = App {
         model: Model::default(),
         rows: Vec::new(),
@@ -128,7 +118,7 @@ fn main() {
         omp_dir,
         agent_dir,
         home,
-        own_zellij,
+        mux,
         tx: tx.clone(),
         watcher,
         git_dirs: HashSet::new(),
@@ -137,8 +127,6 @@ fn main() {
         mirror: None,
         usage: usage::spawn_refresher(tx.clone()),
         close_pending: None,
-        plugin,
-        headless,
         prompt: None,
         manager: None,
         capy: capy::Api::from_env(),
@@ -158,7 +146,7 @@ fn main() {
             manager.send(Command::Reload);
             app.manager = Some(manager);
         }
-        Err(e) if app.own_zellij.is_some() => app.notify(format!("xs-parley : manager désactivé : {e}")),
+        Err(e) if !matches!(app.mux.host, Host::Outside) => app.notify(format!("xs-parley : manager désactivé : {e}")),
         Err(_) => {}
     }
     app.load_pins();
@@ -167,10 +155,7 @@ fn main() {
     app.request_headless();
     app.rebuild();
     // Seulement au démarrage : la fonction fish de l'onglet remet son nom à la commande suivante.
-    if app.own_zellij.is_some()
-        && let Ok(pane) = std::env::var("ZELLIJ_PANE_ID")
-        && let Err(message) = zellij::rename_tab_of(&pane, zellij::TAB_NAME)
-    {
+    if let Err(message) = app.mux.rename_own_tab() {
         app.notify(message);
     }
     let result = app.run(&mut terminal, &rx);
@@ -190,7 +175,7 @@ impl App {
                     f,
                     &self.model,
                     &self.rows,
-                    self.own_zellij.as_deref(),
+                    &self.mux.host,
                     &mut self.list,
                     self.mirror.as_ref(),
                     self.prompt.as_ref(),
@@ -228,6 +213,7 @@ impl App {
                     Event::Usage(Err(message)) => self.model.usage_error = Some(message),
                     Event::Notice(message) => self.notify(message),
                     Event::Headless(panes) => self.model.headless = panes,
+                    Event::Detached(blocks) => self.model.detached = blocks,
                     Event::Resize => {}
                     Event::Parleys => self.manager_send(Command::Reload),
                     Event::Xsp(XspEvent::Status(status)) => self.model.manager = Some(status),
@@ -292,7 +278,7 @@ impl App {
         let Some(mirror) = &mut self.mirror else { return };
         let row = self.model.selected.as_ref().and_then(|k| self.rows.iter().find(|r| &r.key == k));
         match model::copy_source(&self.model, row) {
-            CopySource::Pane(z) => mirror.follow(&z.session, &z.pane_id),
+            CopySource::Pane(pane) => mirror.follow(pane),
             // Une ligne Capy n'existe qu'avec l'API.
             CopySource::Capy(thread) => match &self.capy {
                 Some(api) => mirror.follow_capy(api, thread),
@@ -393,11 +379,21 @@ impl App {
         }
     }
 
-    /// Demande la relecture des panes headless, dans zellij seulement.
+    /// Demande la relecture des panes headless : ceux de la session zellij d'xst et les blocks des
+    /// sessions rex des instances.
     fn request_headless(&self) {
-        if self.own_zellij.is_some() {
-            let _ = self.headless.send(());
-        }
+        let mut rex: Vec<(Option<String>, String)> = self
+            .model
+            .instances
+            .values()
+            .filter_map(|r| match r.pane() {
+                Some(Pane::Rex(b)) => Some((b.server.clone(), b.session.clone())),
+                _ => None,
+            })
+            .collect();
+        rex.sort();
+        rex.dedup();
+        self.mux.refresh(Scope { zellij: self.mux.host.zellij().is_some(), rex });
     }
 
     /// Relit `session-pins.json`.
@@ -489,13 +485,12 @@ impl App {
                 // Un sous-agent partage le pane de sa racine.
                 let root_key = (row.key.0, ROOT_ID.to_string());
                 let Some(root) = self.model.instances.get(&root_key) else { return true };
-                let own = self.own_zellij.as_deref();
                 if pending.is_some_and(|(key, _)| key == root_key) {
                     self.model.message = None;
-                    if let Err(message) = zellij::close(own, root.zellij.as_ref()) {
+                    if let Err(message) = self.mux.close(root.pane()) {
                         self.notify(message);
                     }
-                } else if let Err(message) = zellij::check_target(own, root.zellij.as_ref()) {
+                } else if let Err(message) = mux::check(&self.mux.host, root.pane()) {
                     self.notify(message);
                 } else {
                     let title = if root.title.is_empty() { "cette session" } else { root.title.as_str() };
@@ -538,16 +533,16 @@ impl App {
             }
             KeyCode::Enter => {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
-                let own = self.own_zellij.as_deref();
                 let result = if let Some(p) = self.model.dormant(&row.key) {
-                    self.dormant_cwd(p).and_then(|cwd| zellij::resume(own, &p.id, cwd))
+                    self.dormant_cwd(p).and_then(|cwd| self.mux.resume(&p.id, cwd))
                 } else {
                     // Un sous-agent partage le pane de sa racine.
                     let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
-                    match root.zellij.as_ref() {
-                        // Un pane headless n'est dans aucun onglet : le plugin le sort dans le sien.
-                        Some(z) if self.model.is_headless(own, Some(z)) => self.headless(Headless::Show(&z.pane_id)),
-                        target => zellij::focus(own, target),
+                    // Un pane headless n'est dans aucun onglet : il sort dans le sien.
+                    if self.model.is_headless(self.mux.host.zellij(), root.pane()) {
+                        self.mux.show(root.pane(), &self.tx)
+                    } else {
+                        self.mux.focus(root.pane())
                     }
                 };
                 if let Err(message) = result {
@@ -577,13 +572,13 @@ impl App {
                 let Some(row) = index.map(|i| &self.rows[i]) else { return true };
                 let message = match self.model.dormant(&row.key) {
                     Some(p) => {
-                        let resumed = self.dormant_cwd(p).and_then(|cwd| self.headless(Headless::Resume { id: &p.id, cwd }));
+                        let resumed = self.dormant_cwd(p).and_then(|cwd| self.mux.background(&p.id, cwd, &self.tx));
                         resumed.map_or_else(|message| message, |()| format!("{} reprise en arrière-plan", label(&p.title)))
                     }
                     None if row.kind == RowKind::Error => return true,
                     None => {
                         let root = self.model.instances.get(&(row.key.0, ROOT_ID.to_string()));
-                        if root.is_some_and(|r| self.model.is_headless(self.own_zellij.as_deref(), r.zellij.as_ref())) {
+                        if root.is_some_and(|r| self.model.is_headless(self.mux.host.zellij(), r.pane())) {
                             "Session déjà en arrière-plan".to_string()
                         } else {
                             "Session déjà ouverte : D pour la passer en arrière-plan".to_string()
@@ -600,12 +595,10 @@ impl App {
                     RowKind::Root | RowKind::Sub { .. } => {
                         // Un sous-agent partage le pane de sa racine.
                         let Some(root) = self.model.instances.get(&(row.key.0, ROOT_ID.to_string())) else { return true };
-                        let own = self.own_zellij.as_deref();
-                        if self.model.is_headless(own, root.zellij.as_ref()) {
+                        if self.model.is_headless(self.mux.host.zellij(), root.pane()) {
                             "Session déjà en arrière-plan".to_string()
                         } else {
-                            let hidden = zellij::check_target(own, root.zellij.as_ref())
-                                .and_then(|z| self.headless(Headless::Hide(&z.pane_id)));
+                            let hidden = self.mux.hide(root.pane(), &self.tx);
                             hidden.map_or_else(|message| message, |()| format!("{} passée en arrière-plan", label(&root.title)))
                         }
                     }
@@ -739,7 +732,7 @@ impl App {
         }
         let resumed = self
             .resume_cwd(&request.session, &header.cwd)
-            .and_then(|cwd| self.headless(Headless::Resume { id: &request.session, cwd }));
+            .and_then(|cwd| self.mux.background(&request.session, cwd, &self.tx));
         if let Err(message) = resumed {
             return reply(self, Err(message));
         }
@@ -756,12 +749,6 @@ impl App {
             self.notify(format!("{} : réveil sans publication en 60 s", label(&spawn.title)));
             self.manager_send(Command::Spawned { id: spawn.id, result: Err("l'instance n'a pas publié dans les 60 s".into()) });
         }
-    }
-
-    /// Envoie `command` au plugin xs-tui ; sa réponse arrive plus tard (`Event::Notice`).
-    fn headless(&self, command: Headless) -> Result<(), String> {
-        self.plugin.as_ref().map_err(Clone::clone)?.send(command, &self.tx);
-        Ok(())
     }
 }
 

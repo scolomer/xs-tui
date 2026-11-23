@@ -35,11 +35,28 @@ pub struct Agent {
     pub parent_id: Option<String>,
 }
 
+/// Pane zellij d'une instance (`ZELLIJ_SESSION_NAME`, `ZELLIJ_PANE_ID`).
 #[derive(Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Zellij {
     pub session: String,
     pub pane_id: String,
+}
+
+/// Block rex d'une instance (`REX_SESSION`, `REX_BLOCK`, `REX_SERVER`) ; aussi celui d'xst.
+#[derive(Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Rex {
+    pub session: String,
+    pub block: String,
+    /// Adresse du serveur rex ; sans elle, la CLI `rex` prend le serveur par défaut.
+    pub server: Option<String>,
+}
+
+/// Où tourne une instance.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pane<'a> {
+    Zellij(&'a Zellij),
+    Rex(&'a Rex),
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -52,7 +69,17 @@ pub struct Record {
     pub title: String,
     pub state: State,
     pub zellij: Option<Zellij>,
+    /// Absent des fichiers publiés avant le support de rex.
+    pub rex: Option<Rex>,
     pub started_at: String,
+}
+
+impl Record {
+    /// Pane de l'instance : zellij d'abord, car un zellij lancé dans un terminal rex hérite des
+    /// variables de rex.
+    pub fn pane(&self) -> Option<Pane<'_>> {
+        self.zellij.as_ref().map(Pane::Zellij).or(self.rex.as_ref().map(Pane::Rex))
+    }
 }
 
 #[expect(clippy::large_enum_variant, reason = "valeur transitoire, aussitôt déplacée dans le modèle")]
@@ -118,5 +145,18 @@ mod tests {
         assert_eq!(rec.agent.parent_id, None);
         assert_eq!(rec.state, State::Working);
         assert_eq!(rec.zellij, Some(Zellij { session: "m1".into(), pane_id: "8".into() }));
+    }
+
+    #[test]
+    fn zellij_wins_over_the_rex_terminal_it_runs_in() {
+        let both = VALID.replace(
+            r#""startedAt""#,
+            r#""rex":{"session":"session:a","block":"block:b","server":null},"startedAt""#,
+        );
+        let Parsed::Ok(rec) = parse(both.as_bytes(), Path::new("Main.json"), 8215) else { panic!("error") };
+        assert!(matches!(rec.pane(), Some(Pane::Zellij(z)) if z.pane_id == "8"));
+        let only_rex = both.replace(r#""zellij":{"session":"m1","paneId":"8"}"#, r#""zellij":null"#);
+        let Parsed::Ok(rec) = parse(only_rex.as_bytes(), Path::new("Main.json"), 8215) else { panic!("error") };
+        assert!(matches!(rec.pane(), Some(Pane::Rex(r)) if r.block == "block:b"));
     }
 }
